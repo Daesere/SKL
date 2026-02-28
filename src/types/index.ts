@@ -82,3 +82,10 @@ export type { Adr } from "./ADR.js";
 export { SessionLogSchema } from "./SessionLog.js";
 export type { SessionLog } from "./SessionLog.js";
 
+// AgentContext
+export { AgentContextSchema } from "./AgentContext.js";
+export type { AgentContext } from "./AgentContext.js";
+
+// HookConfig
+export { HookConfigSchema, DEFAULT_HOOK_CONFIG } from "./HookConfig.js";
+export type { HookConfig } from "./HookConfig.js";
