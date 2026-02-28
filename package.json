@@ -1,0 +1,84 @@
+{
+  "name": "skl",
+  "displayName": "SKL - Structured Knowledge Layer",
+  "version": "1.0.0",
+  "description": "Fail-stop coordination system with bounded damage and explicit uncertainty.",
+  "publisher": "Daesere",
+  "main": "./dist/extension.js",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "activationEvents": [],
+  "categories": [
+    "Other"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "skl.initializeProject",
+        "title": "SKL: Initialize Project"
+      },
+      {
+        "command": "skl.generateScopeDefinitions",
+        "title": "SKL: Generate Scope Definitions"
+      },
+      {
+        "command": "skl.confirmScopeDefinitions",
+        "title": "Confirm Scope Definitions",
+        "icon": "$(check)"
+      },
+      {
+        "command": "skl.rejectScopeDefinitions",
+        "title": "Reject Scope Definitions",
+        "icon": "$(close)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "skl.confirmScopeDefinitions",
+          "when": "resourceFilename == 'scope_definitions.proposed.json'",
+          "group": "navigation"
+        },
+        {
+          "command": "skl.rejectScopeDefinitions",
+          "when": "resourceFilename == 'scope_definitions.proposed.json'",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Daesere/SKL.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Daesere/SKL/issues"
+  },
+  "homepage": "https://github.com/Daesere/SKL#readme",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.3.2",
+    "@types/vscode": "^1.109.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "eslint": "^10.0.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1"
+  }
+}
