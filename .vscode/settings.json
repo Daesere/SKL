@@ -1,0 +1,23 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "npx tsc": true,
+        "npx tsx": true,
+        "/^python hook/test_ast_signals\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python hook/test_checks_1_2_5\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python hook/test_dependency_scan\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python hook/test_ast_signals\\.py; python hook/test_checks_1_2_5\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "Test-Path": true
+    }
+}
