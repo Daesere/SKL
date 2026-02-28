@@ -1,0 +1,8 @@
+node_modules/
+out/
+dist/
+*.vsix
+.env
+.skl/scratch/
+__pycache__/
+*.pyc
