@@ -31,6 +31,14 @@
         "command": "skl.rejectScopeDefinitions",
         "title": "Reject Scope Definitions",
         "icon": "$(close)"
+      },
+      {
+        "command": "skl.installHook",
+        "title": "SKL: Install Hook"
+      },
+      {
+        "command": "skl.configureAgent",
+        "title": "SKL: Configure Agent"
       }
     ],
     "menus": {
