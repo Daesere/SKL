@@ -8,6 +8,7 @@ import {
 import { SKLFileSystem, HookInstaller } from "./services/index.js";
 import { SKLDiagnosticsProvider } from "./diagnostics/index.js";
 import { SKLWriteError } from "./errors/index.js";
+import { QueuePanel, generateProposalCount } from "./panels/index.js";
 import type { AgentContext } from "./types/index.js";
 
 // ── Command: skl.installHook ─────────────────────────────────────
@@ -165,6 +166,11 @@ async function configureAgentCommand(
 
 // ── Activation ───────────────────────────────────────────────────
 
+const DEBOUNCE_MS = 300;
+
+/** Disposables that must be cleaned up on deactivation. */
+const _activationDisposables: vscode.Disposable[] = [];
+
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(
@@ -184,6 +190,35 @@ export function activate(context: vscode.ExtensionContext): void {
       rejectScopeDefinitions,
     ),
   );
+
+  // ── Status bar item ───────────────────────────────────────────
+  const statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    100,
+  );
+  statusBarItem.command = "skl.openQueuePanel";
+  statusBarItem.tooltip = "Open SKL Queue";
+  statusBarItem.show();
+  context.subscriptions.push(statusBarItem);
+  _activationDisposables.push(statusBarItem);
+
+  function updateStatusBar(pendingCount: number): void {
+    statusBarItem.text = `$(list-unordered) SKL: ${pendingCount} pending`;
+    if (pendingCount === 0) {
+      statusBarItem.backgroundColor = undefined;
+    } else if (pendingCount <= 10) {
+      statusBarItem.backgroundColor = new vscode.ThemeColor(
+        "statusBarItem.warningBackground",
+      );
+    } else {
+      statusBarItem.backgroundColor = new vscode.ThemeColor(
+        "statusBarItem.errorBackground",
+      );
+    }
+  }
+
+  // Initialise with zero until knowledge.json is read
+  updateStatusBar(0);
 
   // ── Diagnostics + hook-dependent commands ──────────────────────
   const wsFolder = vscode.workspace.workspaceFolders?.[0];
@@ -206,7 +241,29 @@ export function activate(context: vscode.ExtensionContext): void {
           vscode.commands.registerCommand("skl.configureAgent", () =>
             configureAgentCommand(skl),
           ),
+          vscode.commands.registerCommand("skl.openQueuePanel", () =>
+            QueuePanel.createOrShow(context.extensionUri, skl),
+          ),
         );
+
+        // Initial status bar count from current knowledge
+        void skl
+          .readKnowledge()
+          .then((k) => updateStatusBar(generateProposalCount(k.queue ?? [])))
+          .catch(() => {
+            /* no knowledge yet */
+          });
+
+        // Debounced status bar updates on knowledge changes
+        let sbTimer: ReturnType<typeof setTimeout> | undefined;
+        const knowledgeSub = skl.onKnowledgeChanged((k) => {
+          if (sbTimer !== undefined) clearTimeout(sbTimer);
+          sbTimer = setTimeout(() => {
+            sbTimer = undefined;
+            updateStatusBar(generateProposalCount(k.queue ?? []));
+          }, DEBOUNCE_MS);
+        });
+        context.subscriptions.push(knowledgeSub);
 
         // One-time nudge if hook is not installed
         void hookInstaller.isInstalled(skl.repoRoot).then((installed) => {
@@ -233,5 +290,8 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-  // No cleanup needed — subscriptions handle disposal.
+  for (const d of _activationDisposables) {
+    d.dispose();
+  }
+  _activationDisposables.length = 0;
 }

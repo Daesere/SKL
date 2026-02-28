@@ -39,6 +39,10 @@
       {
         "command": "skl.configureAgent",
         "title": "SKL: Configure Agent"
+      },
+      {
+        "command": "skl.openQueuePanel",
+        "title": "SKL: Open Queue Panel"
       }
     ],
     "menus": {
