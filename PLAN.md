@@ -88,7 +88,7 @@ writes State, and produces session handoff logs.
 
 ---
 
-## Stage 4 — CI Integration and Acceptance Criteria 🔄 In progress
+## Stage 4 — CI Integration and Acceptance Criteria ✅
 
 **Goal:** RFC acceptance criteria status updates driven by CI results.
 ADR promotion. uncertainty_level reduction via passing tests.
@@ -116,6 +116,19 @@ ADR promotion. uncertainty_level reduction via passing tests.
 - hook/test_hook_checks.py covers all six check cases and passes
 - npm run lint clean, TypeScript compiles under strict mode
 - Remote up to date with all four stages marked complete in PLAN.md
+
+---
+
+## Implementation Complete
+
+All four stages of the SKL v1.4 reference specification are implemented.
+The system guarantees that coordination-relevant uncertainty, assumptions,
+and cross-scope dependencies cannot propagate implicitly. It does not
+promise correctness. It ensures that when things go wrong, they do so
+locally, transparently, and with bounded blast radius.
+
+For extension work beyond v1.4, see SPEC.md Section 12 (Operational
+Limits) for the constraints any extension must respect.
 
 ---
 
