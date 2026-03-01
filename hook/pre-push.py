@@ -953,7 +953,13 @@ def main() -> None:
     skl_dir = os.path.join(repo_root, ".skl")
 
     config = load_hook_config(skl_dir)
-    queue_max: int = config.get("queue_max", DEFAULT_HOOK_CONFIG["queue_max"])
+    SKL_MODE: str = config.get("skl_mode", "full")
+    PHASE_0_QUEUE_MAX = 50
+    queue_max: int = (
+        PHASE_0_QUEUE_MAX
+        if SKL_MODE == "phase_0"
+        else config.get("queue_max", DEFAULT_HOOK_CONFIG["queue_max"])
+    )
     base_branch: str = config.get(
         "base_branch", DEFAULT_HOOK_CONFIG["base_branch"]
     )
@@ -1027,17 +1033,18 @@ def main() -> None:
         for v in out_of_scope_list:
             print(f"  - {v.path}")
 
-    # ── Check 2: Semantic Scope Validation ──────────────────────
-    violations = check_semantic_scope(violations, scope_entry)
+    # ── Check 2: Semantic Scope Validation ──────────────────────────
+    if SKL_MODE == "full":
+        violations = check_semantic_scope(violations, scope_entry)
 
-    cross_scope_list = [v for v in violations.values() if v.cross_scope_flag]
-    if cross_scope_list:
-        print(
-            f"SKL: {len(cross_scope_list)} file(s) cross semantic scope "
-            "boundaries — proposals will be flagged cross_scope:"
-        )
-        for v in cross_scope_list:
-            print(f"  - {v.path}")
+        cross_scope_list = [v for v in violations.values() if v.cross_scope_flag]
+        if cross_scope_list:
+            print(
+                f"SKL: {len(cross_scope_list)} file(s) cross semantic scope "
+                "boundaries — proposals will be flagged cross_scope:"
+            )
+            for v in cross_scope_list:
+                print(f"  - {v.path}")
 
     # ── Check 5: Queue Budget ───────────────────────────────────
     queue_error = check_queue_budget(knowledge, queue_max)
@@ -1045,31 +1052,33 @@ def main() -> None:
         print(queue_error)
         sys.exit(1)
     # ── Check 6: Acceptance Criteria Gate ───────────────────────
-    # Resolve the current branch; skip silently on any git failure.
-    _current_branch: Optional[str] = None
-    try:
-        _cb = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-        )
-        if _cb.returncode == 0:
-            _current_branch = _cb.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
+    if SKL_MODE == "full":
+        # Resolve the current branch; skip silently on any git failure.
+        _current_branch: Optional[str] = None
+        try:
+            _cb = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                cwd=repo_root,
+            )
+            if _cb.returncode == 0:
+                _current_branch = _cb.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
 
-    if _current_branch is not None:
-        rfcs_dir = os.path.join(skl_dir, "rfcs")
-        if not check_acceptance_criteria(
-            knowledge, agent_context, _current_branch, rfcs_dir
-        ):
-            sys.exit(1)
+        if _current_branch is not None:
+            rfcs_dir = os.path.join(skl_dir, "rfcs")
+            if not check_acceptance_criteria(
+                knowledge, agent_context, _current_branch, rfcs_dir
+            ):
+                sys.exit(1)
 
     # ── Check 7: RFC Scope Pause ─────────────────────────────────
-    rfcs_dir = os.path.join(skl_dir, "rfcs")
-    if not check_rfc_scope_pause(knowledge, agent_context, rfcs_dir):
-        sys.exit(1)
+    if SKL_MODE == "full":
+        rfcs_dir = os.path.join(skl_dir, "rfcs")
+        if not check_rfc_scope_pause(knowledge, agent_context, rfcs_dir):
+            sys.exit(1)
 
     # ── Collect State records & security patterns ───────────────
     state_records: List[Dict[str, Any]] = knowledge.get("state", [])
@@ -1142,10 +1151,16 @@ def main() -> None:
     blocking = sum(
         1 for p in proposals if p.get("blocking_reasons")
     )
-    print(
-        f"SKL: {len(proposals)} proposal(s) submitted to Queue. "
-        f"{blocking} blocking flag(s)."
-    )
+    if SKL_MODE == "phase_0":
+        print(
+            f"SKL Phase 0: {len(proposals)} activity record(s) logged. "
+            f"Run 'SKL: View Activity' in VS Code to see what changed."
+        )
+    else:
+        print(
+            f"SKL: {len(proposals)} proposal(s) submitted to Queue. "
+            f"{blocking} blocking flag(s)."
+        )
     sys.exit(0)
 
 

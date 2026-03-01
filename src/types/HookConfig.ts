@@ -28,6 +28,9 @@ export const HookConfigSchema = z.object({
 
   /** ISO 8601 datetime of last digest review; null until first review. */
   last_digest_at: z.string().datetime().nullable().optional().default(null),
+
+  /** Operating mode: "phase_0" (reduced friction) or "full" (complete governance). */
+  skl_mode: z.enum(["phase_0", "full"]).default("full"),
 });
 
 export type HookConfig = z.infer<typeof HookConfigSchema>;
@@ -41,4 +44,5 @@ export const DEFAULT_HOOK_CONFIG: HookConfig = {
   base_branch: "main",
   python_executable: "python3",
   last_digest_at: null,
+  skl_mode: "full",
 };

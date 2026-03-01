@@ -17,7 +17,7 @@ import {
 import type { Rfc } from "./types/index.js";
 import { DEFAULT_SESSION_BUDGET } from "./types/index.js";
 import { SKLDiagnosticsProvider } from "./diagnostics/index.js";
-import { SKLWriteError } from "./errors/index.js";
+import { SKLWriteError, SKLFileNotFoundError } from "./errors/index.js";
 import { QueuePanel, OrchestratorPanel, DigestPanel, RFCResolutionPanel, generateProposalCount } from "./panels/index.js";
 import type { AgentContext } from "./types/index.js";
 
@@ -312,6 +312,30 @@ export function activate(context: vscode.ExtensionContext): void {
               const updated = { ...config, last_digest_at: new Date().toISOString() };
               await skl.writeHookConfig(updated);
             });
+          }),
+
+          vscode.commands.registerCommand("skl.upgradeToFull", async () => {
+            const config = await skl.readHookConfig();
+            if (config.skl_mode === "full") {
+              void vscode.window.showInformationMessage("Already running full SKL.");
+              return;
+            }
+            try {
+              await skl.readScopeDefinitions();
+            } catch (err) {
+              if (err instanceof SKLFileNotFoundError) {
+                void vscode.window.showWarningMessage(
+                  "Scope definitions are required for full SKL. Run 'SKL: Generate Scope Definitions' first, then run this command again.",
+                );
+                return;
+              }
+              throw err;
+            }
+            const updated = { ...config, skl_mode: "full" as const };
+            await skl.writeHookConfig(updated);
+            void vscode.window.showInformationMessage(
+              "SKL upgraded to full mode. Scope enforcement, RFCs, and the Orchestrator are now active.",
+            );
           }),
 
           vscode.commands.registerCommand("skl.runCICheck", async () => {
