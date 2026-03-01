@@ -5,6 +5,7 @@ export { VerifierService } from "./VerifierService.js";
 export {
   detectStateConflict,
   isUncertaintyLevel3,
+  detectAssumptionConflict,
 } from "./ConflictDetectionService.js";
 export {
   applyStage1Overrides,

@@ -130,3 +130,22 @@ export const StateConflictResultSchema = z.object({
   conflict_description: z.string().nullable(),
 });
 export type StateConflictResult = z.infer<typeof StateConflictResultSchema>;
+
+// AssumptionConflictResult (Section 8.1)
+const AssumptionInlineSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  declared_by: z.string(),
+  scope: z.string(),
+  shared: z.boolean(),
+});
+
+export const AssumptionConflictResultSchema = z.object({
+  has_conflict: z.boolean(),
+  proposal_a_id: z.string().nullable(),
+  proposal_b_id: z.string().nullable(),
+  assumption_a: AssumptionInlineSchema.nullable(),
+  assumption_b: AssumptionInlineSchema.nullable(),
+  conflict_description: z.string().nullable(),
+});
+export type AssumptionConflictResult = z.infer<typeof AssumptionConflictResultSchema>;
