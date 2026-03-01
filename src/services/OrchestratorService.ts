@@ -6,8 +6,30 @@ import type {
   SessionLog,
   QueueProposal,
   HookConfig,
+  KnowledgeFile,
+  ScopeDefinition,
+  ChangeType,
+  VerifierResult,
+  ProposalReviewResult,
 } from "../types/index.js";
 import { DEFAULT_SESSION_BUDGET } from "../types/index.js";
+import { isUncertaintyLevel3 } from "./ConflictDetectionService.js";
+import { applyStage1Overrides, needsVerifierPass } from "./ClassificationService.js";
+import { writeRationale } from "./StateWriterService.js";
+import { VerifierService } from "./VerifierService.js";
+
+/**
+ * Minimal interface for the LLM verifier pass — satisfied by VerifierService
+ * and by plain mock objects in tests.
+ */
+export interface VerifierServiceLike {
+  getFileDiff(filepath: string, branch: string, baseBranch: string): Promise<string>;
+  runVerifierPass(
+    proposal: QueueProposal,
+    agentClassification: ChangeType,
+    diff: string,
+  ): Promise<VerifierResult>;
+}
 
 /**
  * Orchestrator Service (SPEC Section 7)
@@ -23,6 +45,7 @@ export class OrchestratorService {
   private readonly sklFileSystem: SKLFileSystem;
   private readonly extensionContext: vscode.ExtensionContext;
   private readonly budget: SessionBudget;
+  private readonly verifierService: VerifierServiceLike;
 
   /** Most recent session log from the prior session, or null. */
   private priorSessionLog: SessionLog | null = null;
@@ -31,10 +54,12 @@ export class OrchestratorService {
     sklFileSystem: SKLFileSystem,
     context: vscode.ExtensionContext,
     budget: SessionBudget = DEFAULT_SESSION_BUDGET,
+    verifierService?: VerifierServiceLike,
   ) {
     this.sklFileSystem = sklFileSystem;
     this.extensionContext = context;
     this.budget = budget;
+    this.verifierService = verifierService ?? new VerifierService({ appendLine: () => {} });
   }
 
   // ── Session lifecycle ────────────────────────────────────────────
@@ -203,12 +228,142 @@ export class OrchestratorService {
 
   /* eslint-disable @typescript-eslint/no-unused-vars */
 
-  // TODO: implemented in substage 3.7
+  /**
+   * Review a single proposal and return the decision together with
+   * updated session and knowledge state.
+   *
+   * The 8-step review order is mandatory (SPEC Section 7.2). Steps 5–8
+   * are implemented in substage 3.8; this implementation covers 0–4.
+   */
   async reviewProposal(
-    _session: OrchestratorSession,
-    _proposal: QueueProposal,
-  ): Promise<{ decision: string; rationale: string }> {
-    throw new Error("Not implemented — substage 3.7");
+    proposal: QueueProposal,
+    session: OrchestratorSession,
+    knowledge: KnowledgeFile,
+    scopeDefinitions: ScopeDefinition,
+    hookConfig: HookConfig,
+  ): Promise<{
+    result: ProposalReviewResult;
+    updatedKnowledge: KnowledgeFile;
+    updatedSession: OrchestratorSession;
+  }> {
+    let currentProposal = proposal;
+    let updatedSession = session;
+    let updatedKnowledge = knowledge;
+
+    // STEP 0 — Escalation pre-check
+    if (isUncertaintyLevel3(currentProposal, knowledge.state)) {
+      const rationaleText =
+        `Proposal ${currentProposal.proposal_id} automatically escalated: target module ` +
+        `${currentProposal.path} is at uncertainty_level 3 (Contested). Human must explicitly ` +
+        `reduce uncertainty before this proposal can be reviewed.`;
+      updatedKnowledge = writeRationale(
+        currentProposal.proposal_id,
+        "escalate",
+        rationaleText,
+        "architectural",
+        knowledge,
+      );
+      updatedSession = {
+        ...session,
+        escalations: [
+          ...session.escalations,
+          `${currentProposal.proposal_id} escalated: uncertainty level 3 on ${currentProposal.path}`,
+        ],
+      };
+      return {
+        result: {
+          proposal_id: currentProposal.proposal_id,
+          decision: "escalate",
+          rationale: rationaleText,
+          rfc_id: null,
+          state_updated: false,
+          branch_merged: false,
+          merge_conflict: false,
+        },
+        updatedKnowledge,
+        updatedSession,
+      };
+    }
+
+    // STEP 1 — Stage 1 deterministic classification overrides
+    const stage1Result = applyStage1Overrides(currentProposal);
+    currentProposal = {
+      ...currentProposal,
+      classification_verification: {
+        ...currentProposal.classification_verification,
+        stage1_override: stage1Result.stage1_override,
+      },
+    };
+
+    // STEP 2 — Verifier pass (conditional)
+    let verifierResult: VerifierResult | undefined;
+    if (needsVerifierPass(currentProposal, stage1Result)) {
+      const diff = await this.verifierService.getFileDiff(
+        currentProposal.path,
+        currentProposal.branch,
+        hookConfig.base_branch,
+      );
+      verifierResult = await this.verifierService.runVerifierPass(
+        currentProposal,
+        stage1Result.resolved_change_type,
+        diff,
+      );
+      currentProposal = {
+        ...currentProposal,
+        classification_verification: {
+          ...currentProposal.classification_verification,
+          agent_classification: currentProposal.change_type,
+          verifier_classification: verifierResult.verifier_classification,
+          agreement: verifierResult.agreement,
+        },
+      };
+      if (!verifierResult.agreement) {
+        updatedSession = this.recordClassificationDisagreement(
+          updatedSession,
+          currentProposal.agent_id,
+        );
+        if (this.isCircuitBreakerTriggered(updatedSession, currentProposal.agent_id, hookConfig)) {
+          updatedSession = this.flagCircuitBreakerTriggered(
+            updatedSession,
+            currentProposal.agent_id,
+            currentProposal.proposal_id,
+          );
+        }
+      }
+    }
+
+    const resolvedClassification =
+      verifierResult?.resolved_classification ?? stage1Result.resolved_change_type;
+
+    // STEP 3 — Circuit breaker check
+    const circuitBreakerActive = this.isCircuitBreakerTriggered(
+      updatedSession,
+      currentProposal.agent_id,
+      hookConfig,
+    );
+
+    // STEP 4 — Dependency scan review
+    const hasCrossScopeDeps: boolean =
+      currentProposal.dependency_scan.cross_scope_undeclared.length > 0;
+
+    // TODO: steps 5-8 implemented in next prompt
+    void resolvedClassification;
+    void circuitBreakerActive;
+    void hasCrossScopeDeps;
+    void scopeDefinitions;
+    return {
+      result: {
+        proposal_id: currentProposal.proposal_id,
+        decision: "approve",
+        rationale: "TODO: decision logic (steps 5–8) not yet implemented",
+        rfc_id: null,
+        state_updated: false,
+        branch_merged: false,
+        merge_conflict: false,
+      },
+      updatedKnowledge,
+      updatedSession,
+    };
   }
 
   // TODO: implemented in substage 3.8

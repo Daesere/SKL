@@ -164,3 +164,21 @@ export type RFCTriggerReason = z.infer<typeof RFCTriggerReasonSchema>;
 // RationaleRecord (Section 7.4) — re-exported from QueueProposal.ts to avoid circular dep.
 export { RationaleRecordSchema } from "./QueueProposal.js";
 export type { RationaleRecord } from "./QueueProposal.js";
+
+// DecisionType (Section 7.3)
+export const DecisionTypeSchema = z.enum([
+  "auto_approve", "approve", "reject", "escalate", "rfc",
+]);
+export type DecisionType = z.infer<typeof DecisionTypeSchema>;
+
+// ProposalReviewResult (Section 7.3)
+export const ProposalReviewResultSchema = z.object({
+  proposal_id: z.string(),
+  decision: DecisionTypeSchema,
+  rationale: z.string(),
+  rfc_id: z.string().nullable(),
+  state_updated: z.boolean(),
+  branch_merged: z.boolean(),
+  merge_conflict: z.boolean(),
+});
+export type ProposalReviewResult = z.infer<typeof ProposalReviewResultSchema>;
