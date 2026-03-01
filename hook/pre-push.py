@@ -6,8 +6,8 @@ Runs as a Git pre-push hook. Validates file scope, semantic scope,
 and queue budget before allowing a push. Designed to run with
 Python 3.8+ standard library only — no third-party dependencies.
 
-Execution order: startup → Check 1 → Check 2 → Check 5 →
-  [Check 3 — next prompt] → [Check 4 — next prompt] → write.
+Execution order: startup → Check 1 → Check 2 → Check 5 → Check 6 →
+  [Check 7 — next prompt] → Check 3 → Check 4 → write.
 """
 from __future__ import annotations
 
@@ -201,6 +201,112 @@ def check_queue_budget(
             "Wait for the Orchestrator to process the Queue before pushing."
         )
     return None
+
+
+# ── Check 6: Acceptance Criteria Gate ─────────────────────────────
+
+def check_acceptance_criteria(
+    knowledge: Dict[str, Any],
+    agent_context: Dict[str, Any],
+    current_branch: str,
+    rfcs_dir: str,
+) -> bool:
+    """
+    Check 6 — block push when the current branch is linked to an RFC
+    with any uncompleted acceptance criteria.
+
+    RFC-to-branch resolution uses the triggering_proposal's ``branch``
+    field from the Queue. Returns True (allow push) if no applicable
+    RFC has unmet criteria; False (block push) otherwise.
+
+    *rfcs_dir* is the path to the .skl/rfcs/ directory.
+    """
+    # If the rfcs directory is absent or empty, nothing to check.
+    if not os.path.isdir(rfcs_dir):
+        return True
+
+    rfc_files = [
+        os.path.join(rfcs_dir, f)
+        for f in os.listdir(rfcs_dir)
+        if f.endswith(".json")
+    ]
+    if not rfc_files:
+        return True
+
+    # Build a lookup of proposal_id → proposal from the queue.
+    queue: List[Dict[str, Any]] = knowledge.get("queue", [])
+    queue_by_id: Dict[str, Dict[str, Any]] = {
+        p["proposal_id"]: p
+        for p in queue
+        if isinstance(p, dict) and "proposal_id" in p
+    }
+
+    for rfc_path in rfc_files:
+        try:
+            with open(rfc_path, "r", encoding="utf-8") as fh:
+                rfc = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(
+                f"SKL: Warning — could not parse RFC file {rfc_path}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        # Only enforce when the flag is explicitly set.
+        if rfc.get("merge_blocked_until_criteria_pass") is not True:
+            continue
+
+        # Only enforce on open RFCs.
+        if rfc.get("status") != "open":
+            continue
+
+        # Resolve the triggering proposal.
+        triggering_id = rfc.get("triggering_proposal")
+        if not triggering_id:
+            continue
+        proposal = queue_by_id.get(triggering_id)
+        if proposal is None:
+            continue
+
+        # Skip if the proposal has no branch field.
+        proposal_branch = proposal.get("branch")
+        if not proposal_branch:
+            continue
+
+        # Only enforce when the current branch matches the RFC's branch.
+        if proposal_branch != current_branch:
+            continue
+
+        # Collect unmet acceptance criteria.
+        criteria: List[Dict[str, Any]] = rfc.get("acceptance_criteria") or []
+        failing = [
+            c for c in criteria
+            if isinstance(c, dict) and c.get("status") != "passed"
+        ]
+        if not failing:
+            continue
+
+        # Block the push and name every failing criterion.
+        rfc_id = rfc.get("id", os.path.basename(rfc_path))
+        print(
+            f"SKL: Push blocked. RFC {rfc_id} has unmet acceptance criteria:"
+        )
+        for c in failing:
+            ac_id = c.get("ac_id", "?")
+            description = c.get("description", "(no description)")
+            check_type = c.get("check_type", "")
+            check_reference = c.get("check_reference", "")
+            print(
+                f"  - [{ac_id}] {description} "
+                f"(check_type: {check_type}, reference: {check_reference})"
+            )
+        print(
+            "Run 'SKL: Run CI Check' in VS Code to update criterion status "
+            "after your tests pass."
+        )
+        return False
+
+    return True
 
 
 # ── Check 3 helpers: AST risk signal generation ─────────────────────
@@ -843,7 +949,27 @@ def main() -> None:
     if queue_error is not None:
         print(queue_error)
         sys.exit(1)
+    # ── Check 6: Acceptance Criteria Gate ───────────────────────
+    # Resolve the current branch; skip silently on any git failure.
+    _current_branch: Optional[str] = None
+    try:
+        _cb = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+        )
+        if _cb.returncode == 0:
+            _current_branch = _cb.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
 
+    if _current_branch is not None:
+        rfcs_dir = os.path.join(skl_dir, "rfcs")
+        if not check_acceptance_criteria(
+            knowledge, agent_context, _current_branch, rfcs_dir
+        ):
+            sys.exit(1)
     # ── Collect State records & security patterns ───────────────
     state_records: List[Dict[str, Any]] = knowledge.get("state", [])
     invariants = knowledge.get("invariants", {})
