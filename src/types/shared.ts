@@ -70,9 +70,9 @@ export type {
  * Classification Verification (Section 6)
  */
 export const ClassificationVerificationSchema = z.object({
-  agent_classification: ChangeTypeSchema,
-  verifier_classification: ChangeTypeSchema,
-  agreement: z.boolean(),
+  agent_classification: ChangeTypeSchema.nullable(),
+  verifier_classification: ChangeTypeSchema.nullable(),
+  agreement: z.boolean().nullable(),
   stage1_override: z.boolean(),
 });
 export type ClassificationVerification = z.infer<typeof ClassificationVerificationSchema>;
