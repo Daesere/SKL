@@ -412,6 +412,95 @@ export class SKLFileSystem {
     }
   }
 
+  /**
+   * Detect the tech stack from common dependency manifest files in the repo root.
+   * Returns a comma-separated string of up to 5 package names, or "" on failure.
+   * Never throws.
+   */
+  async detectTechStack(): Promise<string> {
+    const root = this._repoRoot;
+
+    // requirements.txt
+    try {
+      const content = await fs.readFile(path.join(root, "requirements.txt"), "utf8");
+      const names = content
+        .split("\n")
+        .filter((l) => l.trim() && !l.trim().startsWith("#"))
+        .slice(0, 10)
+        .map((l) => l.trim().split(/[=><~![\s]/)[0].trim())
+        .filter((n) => n.length > 0)
+        .slice(0, 5);
+      if (names.length > 0) return names.join(", ");
+    } catch { /* try next */ }
+
+    // package.json
+    try {
+      const content = await fs.readFile(path.join(root, "package.json"), "utf8");
+      const pkg = JSON.parse(content) as Record<string, unknown>;
+      const deps = pkg["dependencies"];
+      if (typeof deps === "object" && deps !== null) {
+        const names = Object.keys(deps as Record<string, unknown>).slice(0, 5);
+        if (names.length > 0) return names.join(", ");
+      }
+    } catch { /* try next */ }
+
+    // pyproject.toml
+    try {
+      const content = await fs.readFile(path.join(root, "pyproject.toml"), "utf8");
+      const names: string[] = [];
+      let inDeps = false;
+      for (const line of content.split("\n")) {
+        if (/^\[(tool\.poetry\.dependencies|project)\]/.test(line)) {
+          inDeps = true;
+          continue;
+        }
+        if (inDeps && line.startsWith("[")) break;
+        if (inDeps && names.length < 5) {
+          const m = /^([a-zA-Z0-9_-]+)\s*[=<>!~]/.exec(line);
+          if (m) names.push(m[1] as string);
+        }
+      }
+      if (names.length > 0) return names.join(", ");
+    } catch { /* try next */ }
+
+    // go.mod
+    try {
+      const content = await fs.readFile(path.join(root, "go.mod"), "utf8");
+      const names: string[] = [];
+      let inRequire = false;
+      for (const line of content.split("\n")) {
+        if (line.trim().startsWith("require (")) { inRequire = true; continue; }
+        if (inRequire && line.trim() === ")") break;
+        if (inRequire && names.length < 5) {
+          const parts = line.trim().split(/\s+/);
+          if (parts[0]) {
+            const segs = parts[0].split("/");
+            names.push(segs[segs.length - 1] ?? parts[0]);
+          }
+        }
+      }
+      if (names.length > 0) return names.join(", ");
+    } catch { /* try next */ }
+
+    // Cargo.toml
+    try {
+      const content = await fs.readFile(path.join(root, "Cargo.toml"), "utf8");
+      const names: string[] = [];
+      let inDeps = false;
+      for (const line of content.split("\n")) {
+        if (line.trim() === "[dependencies]") { inDeps = true; continue; }
+        if (inDeps && line.startsWith("[")) break;
+        if (inDeps && names.length < 5) {
+          const m = /^([a-zA-Z0-9_-]+)\s*=/.exec(line.trim());
+          if (m) names.push(m[1] as string);
+        }
+      }
+      if (names.length > 0) return names.join(", ");
+    } catch { /* try next */ }
+
+    return "";
+  }
+
   // ── Repo file existence ──────────────────────────────────────────
 
   /**

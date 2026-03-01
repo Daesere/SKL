@@ -14,8 +14,8 @@ import {
   shouldTriggerDigest,
   DIGEST_INTERVAL,
 } from "./services/index.js";
-import type { Rfc } from "./types/index.js";
-import { DEFAULT_SESSION_BUDGET } from "./types/index.js";
+import type { Rfc, KnowledgeFile } from "./types/index.js";
+import { DEFAULT_SESSION_BUDGET, DEFAULT_HOOK_CONFIG } from "./types/index.js";
 import { SKLDiagnosticsProvider } from "./diagnostics/index.js";
 import { SKLWriteError, SKLFileNotFoundError } from "./errors/index.js";
 import { QueuePanel, OrchestratorPanel, DigestPanel, RFCResolutionPanel, generateProposalCount } from "./panels/index.js";
@@ -312,6 +312,81 @@ export function activate(context: vscode.ExtensionContext): void {
               const updated = { ...config, last_digest_at: new Date().toISOString() };
               await skl.writeHookConfig(updated);
             });
+          }),
+
+          vscode.commands.registerCommand("skl.initPhase0", async () => {
+            // Check if already initialized
+            try {
+              await skl.readKnowledge();
+              void vscode.window.showWarningMessage(
+                "SKL is already initialised in this repo. To start fresh, delete the .skl/ directory and try again.",
+              );
+              return;
+            } catch (err) {
+              if (!(err instanceof SKLFileNotFoundError)) throw err;
+              // knowledge.json not found — proceed with initialization
+            }
+
+            const detectedStack = await skl.detectTechStack();
+            const techStackInput = await vscode.window.showInputBox({
+              prompt: "Tech stack (optional — helps SKL understand your codebase)",
+              value: detectedStack,
+              placeHolder: "e.g. FastAPI, PostgreSQL, React",
+            });
+            if (techStackInput === undefined) return; // dismissed
+
+            const confirm = await vscode.window.showInformationMessage(
+              "SKL Phase 0 will be initialised. This creates .skl/, installs the enforcement hook, and starts logging agent activity. No scope definitions required. You can upgrade to full SKL later.",
+              "Initialise",
+              "Cancel",
+            );
+            if (confirm !== "Initialise") return;
+
+            const techStackArr = techStackInput
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0);
+
+            const initKnowledge: KnowledgeFile = {
+              invariants: {
+                tech_stack: techStackArr,
+                auth_model: "",
+                data_storage: "",
+                security_patterns: [],
+              },
+              state: [],
+              queue: [],
+            };
+            await skl.writeKnowledge(initKnowledge);
+
+            const phase0Config = { ...DEFAULT_HOOK_CONFIG, skl_mode: "phase_0" as const, queue_max: 50 };
+            await skl.writeHookConfig(phase0Config);
+            await skl.ensureSKLStructure();
+
+            // Install hook — warn but do not abort if Python is not found
+            try {
+              const exe = phase0Config.python_executable;
+              const version = await hookInstaller.getPythonVersion(exe);
+              if (version === null) {
+                void vscode.window.showWarningMessage(
+                  "Python 3 not found. The enforcement hook was not installed. Install Python 3.8+ and run 'SKL: Install Hook' to complete setup.",
+                );
+              } else {
+                await hookInstaller.install(skl.repoRoot, exe);
+              }
+            } catch {
+              void vscode.window.showWarningMessage(
+                "Python 3 not found. The enforcement hook was not installed. Install Python 3.8+ and run 'SKL: Install Hook' to complete setup.",
+              );
+            }
+
+            const action = await vscode.window.showInformationMessage(
+              "SKL Phase 0 ready. Set SKL_AGENT_ID=Agent-1 in your agent's terminal and push to start logging activity.",
+              "Copy export command",
+            );
+            if (action === "Copy export command") {
+              await vscode.env.clipboard.writeText("export SKL_AGENT_ID=Agent-1");
+            }
           }),
 
           vscode.commands.registerCommand("skl.upgradeToFull", async () => {
