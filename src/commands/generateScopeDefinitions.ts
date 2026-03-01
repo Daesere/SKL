@@ -4,7 +4,7 @@ import { ScopeDefinitionSchema } from "../types/index.js";
 
 // ── LLM prompt ───────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are an expert software architect. Given the directory tree of a project, generate a scope_definitions.json file following the SKL v1.4 specification.
+export const SYSTEM_PROMPT = `You are an expert software architect. Given the directory tree of a project, generate a scope_definitions.json file following the SKL v1.4 specification.
 
 Each scope must have:
 - description: Narrow description of what it covers.

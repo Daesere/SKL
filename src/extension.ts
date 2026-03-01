@@ -19,6 +19,7 @@ import { DEFAULT_SESSION_BUDGET, DEFAULT_HOOK_CONFIG } from "./types/index.js";
 import { SKLDiagnosticsProvider } from "./diagnostics/index.js";
 import { SKLWriteError, SKLFileNotFoundError } from "./errors/index.js";
 import { QueuePanel, OrchestratorPanel, DigestPanel, RFCResolutionPanel, generateProposalCount } from "./panels/index.js";
+import { SetupWizardPanel } from "./panels/SetupWizardPanel.js";
 import type { AgentContext } from "./types/index.js";
 
 // ── Command: skl.installHook ─────────────────────────────────────
@@ -480,6 +481,10 @@ export function activate(context: vscode.ExtensionContext): void {
               );
             }
           }),
+
+          vscode.commands.registerCommand("skl.openSetupWizard", () => {
+            SetupWizardPanel.createOrShow(context, skl, hookInstaller);
+          }),
         );
 
         // Initial status bar count from current knowledge
@@ -559,6 +564,23 @@ export function activate(context: vscode.ExtensionContext): void {
               });
           }
         });
+
+        // Auto-trigger setup wizard on first activation when no knowledge.json
+        void (async () => {
+          const wizardShown = context.globalState.get<boolean>(
+            "skl.wizardShown",
+            false,
+          );
+          if (!wizardShown) {
+            const hasKnowledge = await skl.fileExistsInRepo(
+              ".skl/knowledge.json",
+            );
+            if (!hasKnowledge) {
+              await context.globalState.update("skl.wizardShown", true);
+              SetupWizardPanel.createOrShow(context, skl, hookInstaller);
+            }
+          }
+        })();
       })
       .catch(() => {
         // Not a Git repository — diagnostics not available.
