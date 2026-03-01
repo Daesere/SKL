@@ -18,6 +18,8 @@ import {
   generateOrchestratorHtml,
   generateProgressUpdate,
 } from "./orchestratorPanelHtml.js";
+import { generateDigestHtml } from "./digestPanelHtml.js";
+import type { DigestReport } from "../services/DigestService.js";
 
 const outDir = join(tmpdir(), "skl-panel-test");
 mkdirSync(outDir, { recursive: true });
@@ -157,3 +159,94 @@ console.log("\nAll files written. Open in a browser to inspect:");
 console.log(`  file://${join(outDir, "test-null.html")}`);
 console.log(`  file://${join(outDir, "test-session.html")}`);
 console.log(`  file://${join(outDir, "test-progress.html")}`);
+
+// ── 4. Digest panel — all five sections ───────────────────────
+
+const mockDigestReport: DigestReport = {
+  generated_at: new Date().toISOString(),
+  architectural_decisions_since_last_digest: [
+    {
+      proposal_id: "prop-auth-042",
+      path: "src/auth/TokenManager.ts",
+      rationale_text: "Introducing a stateless JWT verification layer removes the need for a shared session store. This is an architectural boundary change that affects the auth and api scopes.",
+      decision: "approved",
+      recorded_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+    },
+    {
+      proposal_id: "prop-data-017",
+      path: "src/data/QueryBuilder.ts",
+      rationale_text: "Query builder now uses a cursor-based pagination strategy instead of offset-based. Required by the Product RFC-007 decision.",
+      decision: "auto_approve",
+      recorded_at: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
+    },
+  ],
+  state_entries_for_review: [
+    {
+      id: "auth_token_manager",
+      path: "src/auth/TokenManager.ts",
+      semantic_scope: "auth",
+      scope_schema_version: "1.0",
+      responsibilities: "Manages JWT token creation, verification, and revocation for all authenticated sessions.",
+      dependencies: ["src/config/env.ts", "src/logging/Logger.ts"],
+      invariants_touched: ["auth_model"],
+      assumptions: [],
+      owner: "agent-alpha",
+      version: 3,
+      uncertainty_level: 2,
+      change_count_since_review: 2,
+    },
+    {
+      id: "api_rate_limiter",
+      path: "src/api/RateLimiter.ts",
+      semantic_scope: "api",
+      scope_schema_version: "1.0",
+      responsibilities: "Enforces per-client request rate limits using a token bucket algorithm.",
+      dependencies: ["src/cache/Redis.ts"],
+      invariants_touched: [],
+      assumptions: [],
+      owner: "agent-beta",
+      version: 1,
+      uncertainty_level: 2,
+      change_count_since_review: 3,
+    },
+  ],
+  state_entries_flagged: [
+    {
+      id: "data_query_builder",
+      path: "src/data/QueryBuilder.ts",
+      semantic_scope: "data",
+      scope_schema_version: "1.0",
+      responsibilities: "Constructs parameterised SQL queries for the data layer. Supports cursor-based and offset-based pagination.",
+      dependencies: ["src/data/ConnectionPool.ts"],
+      invariants_touched: ["data_storage"],
+      assumptions: [],
+      owner: "agent-gamma",
+      version: 8,
+      uncertainty_level: 1, // level 1, not 2 — should appear in Section 2 only
+      change_count_since_review: 7,
+    },
+  ],
+  contested_entries: [
+    {
+      id: "infra_deploy_config",
+      path: "infra/deploy.yaml",
+      semantic_scope: "infra",
+      scope_schema_version: "1.0",
+      responsibilities: "Kubernetes deployment configuration for production environment.",
+      dependencies: [],
+      invariants_touched: [],
+      assumptions: [],
+      owner: "agent-delta",
+      version: 2,
+      uncertainty_level: 3,
+      change_count_since_review: 1,
+    },
+  ],
+  open_rfc_ids: ["RFC_003", "RFC_007"],
+  summary: "Digest " + new Date().toLocaleDateString() + ". 2 entries pending review, 1 flagged for drift, 1 contested, 2 open RFCs, 2 architectural decisions since last digest.",
+};
+
+const digestHtml = generateDigestHtml(mockDigestReport);
+writeFileSync(join(outDir, "test-digest.html"), digestHtml, "utf8");
+console.log(`Wrote: ${join(outDir, "test-digest.html")}`);
+console.log(`  file://${join(outDir, "test-digest.html")}`);
