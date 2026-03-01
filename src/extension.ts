@@ -11,12 +11,15 @@ import {
   OrchestratorService,
   promoteRFCtoADR,
   checkRFCDeadlines,
+  CICheckService,
+  shouldTriggerDigest,
+  DIGEST_INTERVAL,
 } from "./services/index.js";
 import type { Rfc } from "./types/index.js";
 import { DEFAULT_SESSION_BUDGET } from "./types/index.js";
 import { SKLDiagnosticsProvider } from "./diagnostics/index.js";
 import { SKLWriteError } from "./errors/index.js";
-import { QueuePanel, OrchestratorPanel, generateProposalCount } from "./panels/index.js";
+import { QueuePanel, OrchestratorPanel, DigestPanel, generateProposalCount } from "./panels/index.js";
 import type { AgentContext } from "./types/index.js";
 
 // ── Command: skl.installHook ─────────────────────────────────────
@@ -365,6 +368,16 @@ export function activate(context: vscode.ExtensionContext): void {
           DEFAULT_SESSION_BUDGET,
         );
 
+        // --- Stage 4: CI Integration and Human Review ---
+
+        // CICheckService — sole path to uncertainty_level 0
+        const ciOutputChannel = vscode.window.createOutputChannel("SKL — CI Checks");
+        const ciCheckService = new CICheckService(skl, ciOutputChannel);
+        context.subscriptions.push(ciOutputChannel);
+
+        // Register CI file watchers for passive detection
+        ciCheckService.registerFileWatchers(context);
+
         // Register commands that need SKLFileSystem / HookInstaller
         context.subscriptions.push(
           vscode.commands.registerCommand("skl.installHook", () =>
@@ -386,6 +399,84 @@ export function activate(context: vscode.ExtensionContext): void {
               skl,
             );
           }),
+
+          // --- Stage 4: CI Integration and Human Review ---
+
+          vscode.commands.registerCommand("skl.reviewDigest", () => {
+            DigestPanel.createOrShow(context.extensionUri, skl);
+            // Update last_digest_at to reset the trigger counter
+            void skl.readHookConfig().then(async (config) => {
+              const updated = { ...config, last_digest_at: new Date().toISOString() };
+              await skl.writeHookConfig(updated);
+            });
+          }),
+
+          vscode.commands.registerCommand("skl.runCICheck", async () => {
+            let knowledge;
+            try {
+              knowledge = await skl.readKnowledge();
+            } catch {
+              void vscode.window.showErrorMessage("SKL: Could not read knowledge.json.");
+              return;
+            }
+
+            const eligible = knowledge.state.filter((r) => r.uncertainty_level > 0);
+            if (eligible.length === 0) {
+              void vscode.window.showInformationMessage(
+                "All State entries are already at uncertainty_level 0.",
+              );
+              return;
+            }
+
+            const item = await vscode.window.showQuickPick(
+              eligible.map((r) => ({
+                label: `${r.id} — ${r.path} (level ${r.uncertainty_level})`,
+                id: r.id,
+              })),
+              { canPickMany: false, placeHolder: "Select a State record to CI-check" },
+            );
+            if (!item) return;
+
+            // Refresh knowledge after quick pick
+            knowledge = await skl.readKnowledge();
+            let record = knowledge.state.find((r) => r.id === item.id);
+            if (!record) return;
+
+            // If no test reference is set, prompt for one
+            if (!record.uncertainty_reduced_by) {
+              const testPath = await vscode.window.showInputBox({
+                prompt: `No test reference set for ${record.path}. Enter the test file path.`,
+                placeHolder: "e.g. tests/test_auth.py",
+              });
+              if (!testPath) return;
+
+              // Write the updated record before running the check
+              const updatedRecord = { ...record, uncertainty_reduced_by: testPath };
+              const updatedKnowledge = {
+                ...knowledge,
+                state: knowledge.state.map((r) =>
+                  r.id === item.id ? updatedRecord : r,
+                ),
+              };
+              await skl.writeKnowledge(updatedKnowledge);
+              record = updatedRecord;
+            }
+
+            void vscode.window.showInformationMessage(
+              `Running CI check for ${record.id}...`,
+            );
+
+            const result = await ciCheckService.runCheck(record.id);
+            if (result.passed) {
+              void vscode.window.showInformationMessage(
+                `✓ ${result.test_reference} passed. ${result.state_record_id} is now uncertainty_level 0.`,
+              );
+            } else {
+              void vscode.window.showWarningMessage(
+                `✗ Test failed (exit ${result.exit_code}). uncertainty_level unchanged. Check the SKL output channel for details.`,
+              );
+            }
+          }),
         );
 
         // Initial status bar count from current knowledge
@@ -398,6 +489,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
         // Debounced status bar updates on knowledge changes
         let sbTimer: ReturnType<typeof setTimeout> | undefined;
+        // Digest notification: fire once per session, reset when panel closes
+        let digestNotificationShown = false;
         const knowledgeSub = skl.onKnowledgeChanged((k) => {
           if (sbTimer !== undefined) clearTimeout(sbTimer);
           sbTimer = setTimeout(() => {
@@ -423,6 +516,25 @@ export function activate(context: vscode.ExtensionContext): void {
                   });
               }
             });
+
+            // Digest trigger notification — fires once per session until panel is opened
+            if (!digestNotificationShown) {
+              void skl.readHookConfig().then((config) => {
+                if (shouldTriggerDigest(k, config.last_digest_at ?? null)) {
+                  digestNotificationShown = true;
+                  void vscode.window
+                    .showInformationMessage(
+                      `SKL: ${DIGEST_INTERVAL} architectural decisions approved. Time to review the digest.`,
+                      "Open Digest",
+                    )
+                    .then((action) => {
+                      if (action === "Open Digest") {
+                        void vscode.commands.executeCommand("skl.reviewDigest");
+                      }
+                    });
+                }
+              });
+            }
           }, DEBOUNCE_MS);
         });
         context.subscriptions.push(knowledgeSub);

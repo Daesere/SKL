@@ -4,6 +4,8 @@ export { OrchestratorService } from "./OrchestratorService.js";
 export { VerifierService } from "./VerifierService.js";
 export { detectRFCTrigger, generateRFC, checkRFCDeadlines } from "./RFCService.js";
 export { deriveStateId, createStateEntry, updateStateEntry, writeRationale, promoteRFCtoADR } from "./StateWriterService.js";
+export { CICheckService } from "./CICheckService.js";
+export { generateDigest, shouldTriggerDigest, DIGEST_INTERVAL, REVIEW_THRESHOLD } from "./DigestService.js";
 export {
   detectStateConflict,
   isUncertaintyLevel3,
