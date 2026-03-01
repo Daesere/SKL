@@ -62,6 +62,100 @@ async function installHookCommand(
   }
 }
 
+// ── Command: skl.initPhase0 ─────────────────────────────────────
+
+/**
+ * Bootstrap command — must be registered synchronously on activation
+ * so it is available before .skl/ exists.
+ */
+async function initPhase0Command(
+  extContext: vscode.ExtensionContext,
+): Promise<void> {
+  const wsFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!wsFolder) {
+    void vscode.window.showErrorMessage(
+      "SKL: No workspace folder open. Open a repository folder first.",
+    );
+    return;
+  }
+
+  let skl: SKLFileSystem;
+  try {
+    skl = await SKLFileSystem.create(wsFolder.uri.fsPath);
+  } catch {
+    void vscode.window.showErrorMessage(
+      "SKL: Could not find a Git repository root. Open the repo folder in VS Code.",
+    );
+    return;
+  }
+  const hookInstaller = new HookInstaller(extContext);
+
+  // Check if already initialized
+  try {
+    await skl.readKnowledge();
+    void vscode.window.showWarningMessage(
+      "SKL is already initialised in this repo. To start fresh, delete the .skl/ directory and try again.",
+    );
+    return;
+  } catch (err) {
+    if (!(err instanceof SKLFileNotFoundError)) throw err;
+    // knowledge.json not found — proceed with initialization
+  }
+
+  const detectedStack = await skl.detectTechStack();
+  const techStackInput = await vscode.window.showInputBox({
+    prompt: "Tech stack (optional — helps SKL understand your codebase)",
+    value: detectedStack,
+    placeHolder: "e.g. FastAPI, PostgreSQL, React",
+  });
+  if (techStackInput === undefined) return; // dismissed
+
+  const confirm = await vscode.window.showInformationMessage(
+    "SKL Phase 0 will be initialised. This creates .skl/, installs the enforcement hook, and starts logging agent activity. No scope definitions required. You can upgrade to full SKL later.",
+    "Initialise",
+    "Cancel",
+  );
+  if (confirm !== "Initialise") return;
+
+  const techStackArr = techStackInput
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  const initKnowledge: KnowledgeFile = {
+    invariants: {
+      tech_stack: techStackArr,
+      auth_model: "",
+      data_storage: "",
+      security_patterns: [],
+    },
+    state: [],
+    queue: [],
+  };
+  await skl.writeKnowledge(initKnowledge);
+
+  const phase0Config = { ...DEFAULT_HOOK_CONFIG, skl_mode: "phase_0" as const, queue_max: 50 };
+  await skl.writeHookConfig(phase0Config);
+  await skl.ensureSKLStructure();
+
+  // Install hook — show error but do not abort if Python is not found
+  try {
+    await hookInstaller.install(skl.repoRoot, phase0Config, skl);
+  } catch {
+    void vscode.window.showWarningMessage(
+      "Hook installation failed. Run 'SKL: Install Hook' to retry.",
+    );
+  }
+
+  const action = await vscode.window.showInformationMessage(
+    "SKL Phase 0 ready. Set SKL_AGENT_ID=Agent-1 in your agent's terminal and push to start logging activity.",
+    "Copy export command",
+  );
+  if (action === "Copy export command") {
+    await vscode.env.clipboard.writeText("export SKL_AGENT_ID=Agent-1");
+  }
+}
+
 // ── Command: skl.configureAgent ──────────────────────────────────
 
 async function configureAgentCommand(
@@ -190,6 +284,11 @@ export function activate(context: vscode.ExtensionContext): void {
       "skl.rejectScopeDefinitions",
       rejectScopeDefinitions,
     ),
+    // Bootstrap commands — registered synchronously so they are available
+    // before .skl/ exists (i.e. before SKLFileSystem.create() can succeed).
+    vscode.commands.registerCommand("skl.initPhase0", () =>
+      initPhase0Command(context),
+    ),
   );
 
   // ── Status bar item ───────────────────────────────────────────
@@ -311,73 +410,6 @@ export function activate(context: vscode.ExtensionContext): void {
               const updated = { ...config, last_digest_at: new Date().toISOString() };
               await skl.writeHookConfig(updated);
             });
-          }),
-
-          vscode.commands.registerCommand("skl.initPhase0", async () => {
-            // Check if already initialized
-            try {
-              await skl.readKnowledge();
-              void vscode.window.showWarningMessage(
-                "SKL is already initialised in this repo. To start fresh, delete the .skl/ directory and try again.",
-              );
-              return;
-            } catch (err) {
-              if (!(err instanceof SKLFileNotFoundError)) throw err;
-              // knowledge.json not found — proceed with initialization
-            }
-
-            const detectedStack = await skl.detectTechStack();
-            const techStackInput = await vscode.window.showInputBox({
-              prompt: "Tech stack (optional — helps SKL understand your codebase)",
-              value: detectedStack,
-              placeHolder: "e.g. FastAPI, PostgreSQL, React",
-            });
-            if (techStackInput === undefined) return; // dismissed
-
-            const confirm = await vscode.window.showInformationMessage(
-              "SKL Phase 0 will be initialised. This creates .skl/, installs the enforcement hook, and starts logging agent activity. No scope definitions required. You can upgrade to full SKL later.",
-              "Initialise",
-              "Cancel",
-            );
-            if (confirm !== "Initialise") return;
-
-            const techStackArr = techStackInput
-              .split(",")
-              .map((s) => s.trim())
-              .filter((s) => s.length > 0);
-
-            const initKnowledge: KnowledgeFile = {
-              invariants: {
-                tech_stack: techStackArr,
-                auth_model: "",
-                data_storage: "",
-                security_patterns: [],
-              },
-              state: [],
-              queue: [],
-            };
-            await skl.writeKnowledge(initKnowledge);
-
-            const phase0Config = { ...DEFAULT_HOOK_CONFIG, skl_mode: "phase_0" as const, queue_max: 50 };
-            await skl.writeHookConfig(phase0Config);
-            await skl.ensureSKLStructure();
-
-            // Install hook — show error but do not abort if Python is not found
-            try {
-              await hookInstaller.install(skl.repoRoot, phase0Config, skl);
-            } catch {
-              void vscode.window.showWarningMessage(
-                "Hook installation failed. Run 'SKL: Install Hook' to retry.",
-              );
-            }
-
-            const action = await vscode.window.showInformationMessage(
-              "SKL Phase 0 ready. Set SKL_AGENT_ID=Agent-1 in your agent's terminal and push to start logging activity.",
-              "Copy export command",
-            );
-            if (action === "Copy export command") {
-              await vscode.env.clipboard.writeText("export SKL_AGENT_ID=Agent-1");
-            }
           }),
 
           vscode.commands.registerCommand("skl.upgradeToFull", async () => {
