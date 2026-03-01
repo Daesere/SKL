@@ -5,8 +5,9 @@
  *   npx tsx --require ./src/testing/register-vscode-mock.cjs src/services/__tests__/DigestService.test.ts
  */
 
-import { generateDigest, shouldTriggerDigest, DIGEST_INTERVAL, REVIEW_THRESHOLD } from "../DigestService.js";
-import type { KnowledgeFile, StateRecord, QueueProposal } from "../../types/index.js";
+import { generateDigest, computePriorityScore, shouldTriggerDigest, DIGEST_INTERVAL, REVIEW_THRESHOLD } from "../DigestService.js";
+import type { KnowledgeFile, StateRecord, QueueProposal, SessionLog } from "../../types/index.js";
+import type { SKLFileSystem } from "../SKLFileSystem.js";
 
 // ---------------------------------------------------------------------------
 // Scaffolding
@@ -124,6 +125,26 @@ function makeKnowledge(
   };
 }
 
+/** Minimal SKLFileSystem mock for DigestService tests. */
+function makeSkl(sessionLog: SessionLog | null = null): SKLFileSystem {
+  return {
+    readMostRecentSessionLog: async () => sessionLog,
+  } as unknown as SKLFileSystem;
+}
+
+function makeSessionLog(patterns: string[]): SessionLog {
+  return {
+    session_id: "s-001",
+    agent_id: "agent-alpha",
+    started_at: "2025-01-01T00:00:00.000Z",
+    ended_at: "2025-01-01T01:00:00.000Z",
+    proposals_reviewed: [],
+    state_records_updated: [],
+    recurring_patterns_flagged: patterns,
+    session_summary: "test session",
+  } as unknown as SessionLog;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -140,7 +161,7 @@ await testAsync("Test 1 — 3 level-2 entries → state_entries_for_review.lengt
     makeStateRecord({ id: "c", uncertainty_level: 2 }),
     makeStateRecord({ id: "d", uncertainty_level: 1 }), // not level-2, excluded
   ];
-  const report = generateDigest(makeKnowledge(records), []);
+  const report = await generateDigest(makeKnowledge(records), [], makeSkl());
   assertEqual(report.state_entries_for_review.length, 3, "state_entries_for_review.length");
 });
 
@@ -148,7 +169,7 @@ await testAsync("Test 2 — entry at change_count_since_review >= REVIEW_THRESHO
   const records = [
     makeStateRecord({ id: "flagged", change_count_since_review: REVIEW_THRESHOLD }),
   ];
-  const report = generateDigest(makeKnowledge(records), []);
+  const report = await generateDigest(makeKnowledge(records), [], makeSkl());
   assertEqual(report.state_entries_flagged.length, 1, "flagged.length");
   assertEqual(report.state_entries_flagged[0].id, "flagged", "flagged id");
 });
@@ -157,7 +178,7 @@ await testAsync("Test 3 — entry at change_count_since_review < REVIEW_THRESHOL
   const records = [
     makeStateRecord({ id: "under", change_count_since_review: REVIEW_THRESHOLD - 1 }),
   ];
-  const report = generateDigest(makeKnowledge(records), []);
+  const report = await generateDigest(makeKnowledge(records), [], makeSkl());
   assertEqual(report.state_entries_flagged.length, 0, "flagged.length");
 });
 
@@ -165,7 +186,7 @@ await testAsync("Test 4 — level-3 entry → in contested_entries only, not in 
   const records = [
     makeStateRecord({ id: "contested", uncertainty_level: 3, change_count_since_review: 0 }),
   ];
-  const report = generateDigest(makeKnowledge(records), []);
+  const report = await generateDigest(makeKnowledge(records), [], makeSkl());
   assertEqual(report.contested_entries.length, 1, "contested.length");
   assertEqual(report.state_entries_for_review.length, 0, "for_review.length should be 0");
 });
@@ -205,8 +226,8 @@ await testAsync("Test 8 — generateDigest is pure: two calls with same input yi
   const knowledge = makeKnowledge(records, []);
   const openRfcIds = ["rfc-001", "rfc-002"];
 
-  const r1 = generateDigest(knowledge, openRfcIds);
-  const r2 = generateDigest(knowledge, openRfcIds);
+  const r1 = await generateDigest(knowledge, openRfcIds, makeSkl());
+  const r2 = await generateDigest(knowledge, openRfcIds, makeSkl());
 
   assertEqual(r1.state_entries_for_review.length, r2.state_entries_for_review.length, "for_review.length");
   assertEqual(r1.state_entries_flagged.length, r2.state_entries_flagged.length, "flagged.length");
@@ -220,6 +241,85 @@ await testAsync("Test 8 — generateDigest is pure: two calls with same input yi
 
 // ---------------------------------------------------------------------------
 // Summary
+// ---------------------------------------------------------------------------
+
+console.log("\nDigestService — computePriorityScore and priority sorting");
+console.log("==========================================================");
+
+await testAsync(
+  "Test S1 — computePriorityScore: change_count=3, level=1, no shared assumptions → 6",
+  async () => {
+    const record = makeStateRecord({ change_count_since_review: 3, uncertainty_level: 1, assumptions: [] });
+    const score = computePriorityScore(record);
+    assertEqual(score, 6, "priority_score");
+  },
+);
+
+await testAsync(
+  "Test S2 — computePriorityScore: change_count=5, level=2 → 40",
+  async () => {
+    const record = makeStateRecord({ change_count_since_review: 5, uncertainty_level: 2, assumptions: [] });
+    const score = computePriorityScore(record);
+    // (5 * 2) + 10 + 20 = 40
+    assertEqual(score, 40, "priority_score");
+  },
+);
+
+await testAsync(
+  "Test S3 — computePriorityScore: level=3, change_count=0 → 100",
+  async () => {
+    const record = makeStateRecord({ uncertainty_level: 3, change_count_since_review: 0, assumptions: [] });
+    const score = computePriorityScore(record);
+    assertEqual(score, 100, "priority_score");
+  },
+);
+
+await testAsync(
+  "Test S4 — generateDigest returns state_entries_for_review sorted by priority_score descending",
+  async () => {
+    const records = [
+      makeStateRecord({ id: "low", uncertainty_level: 2, change_count_since_review: 1, assumptions: [] }),
+      makeStateRecord({ id: "high", uncertainty_level: 2, change_count_since_review: 6, assumptions: [] }),
+      makeStateRecord({ id: "mid", uncertainty_level: 2, change_count_since_review: 3, assumptions: [] }),
+    ];
+    const report = await generateDigest(makeKnowledge(records), [], makeSkl());
+    const ids = report.state_entries_for_review.map((r) => r.id);
+    if (ids[0] !== "high") {
+      throw new Error(`Expected "high" first, got "${ids[0]}". Order: ${ids.join(", ")}`);
+    }
+    if (ids[ids.length - 1] !== "low") {
+      throw new Error(`Expected "low" last, got "${ids[ids.length - 1]}"`);
+    }
+    for (let i = 0; i < report.state_entries_for_review.length - 1; i++) {
+      const a = report.state_entries_for_review[i].priority_score;
+      const b = report.state_entries_for_review[i + 1].priority_score;
+      if (a < b) throw new Error(`Not sorted descending at index ${i}: ${a} < ${b}`);
+    }
+  },
+);
+
+await testAsync(
+  "Test S5 — generateDigest with session log → patterns_from_session_log matches",
+  async () => {
+    const patterns = ["pattern A", "pattern B"];
+    const skl = makeSkl(makeSessionLog(patterns));
+    const report = await generateDigest(makeKnowledge(), [], skl);
+    assertEqual(report.patterns_from_session_log.length, 2, "patterns length");
+    assertEqual(report.patterns_from_session_log[0], "pattern A", "first pattern");
+  },
+);
+
+await testAsync(
+  "Test S6 — generateDigest with readMostRecentSessionLog returning null → patterns_from_session_log is []",
+  async () => {
+    const skl = makeSkl(null);
+    const report = await generateDigest(makeKnowledge(), [], skl);
+    assertEqual(report.patterns_from_session_log.length, 0, "patterns_from_session_log should be empty");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Summary (final)
 // ---------------------------------------------------------------------------
 
 console.log();

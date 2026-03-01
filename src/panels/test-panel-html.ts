@@ -197,6 +197,7 @@ const mockDigestReport: DigestReport = {
       version: 3,
       uncertainty_level: 2,
       change_count_since_review: 2,
+      priority_score: 14,
     },
     {
       id: "api_rate_limiter",
@@ -211,6 +212,7 @@ const mockDigestReport: DigestReport = {
       version: 1,
       uncertainty_level: 2,
       change_count_since_review: 3,
+      priority_score: 16,
     },
   ],
   state_entries_flagged: [
@@ -227,6 +229,7 @@ const mockDigestReport: DigestReport = {
       version: 8,
       uncertainty_level: 1, // level 1, not 2 — should appear in Section 2 only
       change_count_since_review: 7,
+      priority_score: 34,
     },
   ],
   contested_entries: [
@@ -243,9 +246,11 @@ const mockDigestReport: DigestReport = {
       version: 2,
       uncertainty_level: 3,
       change_count_since_review: 1,
+      priority_score: 102,
     },
   ],
   open_rfc_ids: ["RFC_003", "RFC_007"],
+  patterns_from_session_log: ["Repeated auth model changes", "Cross-scope writes to data layer"],
   summary: "Digest " + new Date().toLocaleDateString() + ". 2 entries pending review, 1 flagged for drift, 1 contested, 2 open RFCs, 2 architectural decisions since last digest.",
 };
 

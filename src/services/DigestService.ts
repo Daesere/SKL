@@ -9,6 +9,7 @@
  */
 
 import type { KnowledgeFile, StateRecord, QueueProposal } from "../types/index.js";
+import type { SKLFileSystem } from "./SKLFileSystem.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -23,6 +24,8 @@ export const REVIEW_THRESHOLD = 5;
 
 // ── DigestReport type ─────────────────────────────────────────────────────────
 
+export type ScoredStateRecord = StateRecord & { priority_score: number };
+
 export type DigestReport = {
   generated_at: string;
   architectural_decisions_since_last_digest: Array<{
@@ -32,10 +35,11 @@ export type DigestReport = {
     decision: string;
     recorded_at: string;
   }>;
-  state_entries_for_review: StateRecord[];
-  state_entries_flagged: StateRecord[];
-  contested_entries: StateRecord[];
+  state_entries_for_review: ScoredStateRecord[];
+  state_entries_flagged: ScoredStateRecord[];
+  contested_entries: ScoredStateRecord[];
   open_rfc_ids: string[];
+  patterns_from_session_log: string[];
   summary: string;
 };
 
@@ -52,20 +56,36 @@ function isApprovedProposal(p: QueueProposal): boolean {
   return p.status === "approved" || (p.status as string) === "auto_approve";
 }
 
+// ── Priority scoring ──────────────────────────────────────────────────────────
+
+/**
+ * Compute a priority score for a State record.
+ * Higher scores surface in the digest first.
+ */
+export function computePriorityScore(record: StateRecord): number {
+  return (
+    record.change_count_since_review * 2 +
+    (record.uncertainty_level === 3 ? 100 : 0) +
+    (record.uncertainty_level === 2 ? 10 : 0) +
+    (record.change_count_since_review >= REVIEW_THRESHOLD ? 20 : 0) +
+    (record.assumptions ?? []).filter((a) => a.shared).length * 3
+  );
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
  * Build a DigestReport from the current KnowledgeFile and a list of open RFC IDs.
  *
- * Pure function — deterministic given the same inputs.
- *
- * @param knowledge   Current knowledge.json contents.
- * @param openRfcIds  RFC IDs currently open (caller resolves these from RFC files).
+ * @param knowledge      Current knowledge.json contents.
+ * @param openRfcIds     RFC IDs currently open (caller resolves these from RFC files).
+ * @param sklFileSystem  File system for reading the session log.
  */
-export function generateDigest(
+export async function generateDigest(
   knowledge: KnowledgeFile,
   openRfcIds: string[],
-): DigestReport {
+  sklFileSystem: SKLFileSystem,
+): Promise<DigestReport> {
   // ── Architectural decisions (most recent DIGEST_INTERVAL, descending) ──────
   const architecturalDecisions = knowledge.queue
     .filter(
@@ -88,18 +108,24 @@ export function generateDigest(
     }));
 
   // ── State categorisation ──────────────────────────────────────────────────
-  const stateEntriesForReview = knowledge.state.filter(
-    (r) => r.uncertainty_level === 2,
-  );
+  const stateEntriesForReview: ScoredStateRecord[] = knowledge.state
+    .filter((r) => r.uncertainty_level === 2)
+    .map((r) => ({ ...r, priority_score: computePriorityScore(r) }))
+    .sort((a, b) => b.priority_score - a.priority_score);
 
-  const stateEntriesFlagged = knowledge.state.filter(
-    (r) => r.change_count_since_review >= REVIEW_THRESHOLD,
-  );
+  const stateEntriesFlagged: ScoredStateRecord[] = knowledge.state
+    .filter((r) => r.change_count_since_review >= REVIEW_THRESHOLD)
+    .map((r) => ({ ...r, priority_score: computePriorityScore(r) }))
+    .sort((a, b) => b.priority_score - a.priority_score);
 
-  const contestedEntries = knowledge.state.filter(
-    (r) => r.uncertainty_level === 3,
-  );
+  const contestedEntries: ScoredStateRecord[] = knowledge.state
+    .filter((r) => r.uncertainty_level === 3)
+    .map((r) => ({ ...r, priority_score: computePriorityScore(r) }))
+    .sort((a, b) => b.priority_score - a.priority_score);
 
+  // ── Session log patterns ──────────────────────────────────────────────────
+  const sessionLog = await sklFileSystem.readMostRecentSessionLog();
+  const patternsFromSessionLog = sessionLog?.recurring_patterns_flagged ?? [];
   // ── Summary string ────────────────────────────────────────────────────────
   const summary =
     `Digest ${new Date().toLocaleDateString()}. ` +
@@ -116,6 +142,7 @@ export function generateDigest(
     state_entries_flagged: stateEntriesFlagged,
     contested_entries: contestedEntries,
     open_rfc_ids: openRfcIds,
+    patterns_from_session_log: patternsFromSessionLog,
     summary,
   };
 }

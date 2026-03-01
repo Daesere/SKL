@@ -136,12 +136,12 @@ export class DigestPanel {
         r.status === "fulfilled" && r.value.status === "open" ? [r.value.id] : [],
       );
 
-      const report = generateDigest(knowledge, openRfcIds);
+      const report = await generateDigest(knowledge, openRfcIds, this._skl);
       this._panel.webview.html = generateDigestHtml(report);
     } catch {
       // On error render an empty digest
       this._panel.webview.html = generateDigestHtml(
-        generateDigest(this.currentKnowledge, []),
+        await generateDigest(this.currentKnowledge, [], this._skl),
       );
     }
   }
