@@ -4,6 +4,7 @@ export { DigestPanel } from "./DigestPanel.js";
 export { RFCResolutionPanel } from "./RFCResolutionPanel.js";
 export { TaskAssignmentPanel } from "./TaskAssignmentPanel.js";
 export { SetupWizardPanel } from "./SetupWizardPanel.js";
+export { ActivityFeedPanel } from "./ActivityFeedPanel.js";
 export { generateQueueHtml, generateProposalCount, generateHeatmapSection } from "./queuePanelHtml.js";
 export { generateOrchestratorHtml, generateProgressUpdate } from "./orchestratorPanelHtml.js";
 export { generateDigestHtml } from "./digestPanelHtml.js";

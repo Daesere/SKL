@@ -20,6 +20,7 @@ import { SKLDiagnosticsProvider } from "./diagnostics/index.js";
 import { SKLWriteError, SKLFileNotFoundError } from "./errors/index.js";
 import { QueuePanel, OrchestratorPanel, DigestPanel, RFCResolutionPanel, generateProposalCount } from "./panels/index.js";
 import { SetupWizardPanel } from "./panels/SetupWizardPanel.js";
+import { ActivityFeedPanel } from "./panels/ActivityFeedPanel.js";
 import type { AgentContext } from "./types/index.js";
 
 // ── Command: skl.installHook ─────────────────────────────────────
@@ -213,9 +214,16 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(statusBarItem);
   _activationDisposables.push(statusBarItem);
 
-  function updateStatusBar(pendingCount: number): void {
-    statusBarItem.text = `$(list-unordered) SKL: ${pendingCount} pending`;
-    if (pendingCount === 0) {
+  function updateStatusBar(pendingCount: number, sklMode?: string): void {
+    const isPhase0 = sklMode === "phase_0";
+    statusBarItem.text = isPhase0
+      ? `$(list-unordered) SKL Phase 0: ${pendingCount} logged`
+      : `$(list-unordered) SKL: ${pendingCount} pending`;
+    statusBarItem.command = isPhase0 ? "skl.openActivityFeed" : "skl.openQueuePanel";
+    statusBarItem.tooltip = isPhase0 ? "Open SKL Activity Feed" : "Open SKL Queue";
+    if (isPhase0) {
+      statusBarItem.backgroundColor = undefined;
+    } else if (pendingCount === 0) {
       statusBarItem.backgroundColor = undefined;
     } else if (pendingCount <= 10) {
       statusBarItem.backgroundColor = new vscode.ThemeColor(
@@ -485,12 +493,15 @@ export function activate(context: vscode.ExtensionContext): void {
           vscode.commands.registerCommand("skl.openSetupWizard", () => {
             SetupWizardPanel.createOrShow(context, skl, hookInstaller);
           }),
+
+          vscode.commands.registerCommand("skl.openActivityFeed", () => {
+            ActivityFeedPanel.createOrShow(context.extensionUri, skl);
+          }),
         );
 
         // Initial status bar count from current knowledge
-        void skl
-          .readKnowledge()
-          .then((k) => updateStatusBar(generateProposalCount(k.queue ?? [])))
+        void Promise.all([skl.readKnowledge(), skl.readHookConfig()])
+          .then(([k, config]) => updateStatusBar(generateProposalCount(k.queue ?? []), config.skl_mode))
           .catch(() => {
             /* no knowledge yet */
           });
@@ -503,7 +514,10 @@ export function activate(context: vscode.ExtensionContext): void {
           if (sbTimer !== undefined) clearTimeout(sbTimer);
           sbTimer = setTimeout(() => {
             sbTimer = undefined;
-            updateStatusBar(generateProposalCount(k.queue ?? []));
+            // Read hookConfig to determine mode for status bar
+            void skl.readHookConfig()
+              .then((config) => updateStatusBar(generateProposalCount(k.queue ?? []), config.skl_mode))
+              .catch(() => updateStatusBar(generateProposalCount(k.queue ?? [])));
 
             // RFC deadline notifications — one per RFC per extension session
             void checkRFCDeadlines(skl).then((expired) => {
@@ -579,6 +593,20 @@ export function activate(context: vscode.ExtensionContext): void {
               await context.globalState.update("skl.wizardShown", true);
               SetupWizardPanel.createOrShow(context, skl, hookInstaller);
             }
+          }
+        })();
+
+        // Auto-open Activity Feed on activation when repo is Phase 0
+        void (async () => {
+          try {
+            const hasKnowledge = await skl.fileExistsInRepo(".skl/knowledge.json");
+            if (!hasKnowledge) return;
+            const config = await skl.readHookConfig();
+            if (config.skl_mode === "phase_0" && !ActivityFeedPanel.isOpen()) {
+              ActivityFeedPanel.createOrShow(context.extensionUri, skl);
+            }
+          } catch {
+            // Not a Phase 0 repo or config unreadable — skip auto-open
           }
         })();
       })

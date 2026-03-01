@@ -63,6 +63,18 @@
       {
         "command": "skl.openSetupWizard",
         "title": "SKL: Open Setup Wizard"
+      },
+      {
+        "command": "skl.initPhase0",
+        "title": "SKL: Init (Phase 0)"
+      },
+      {
+        "command": "skl.openActivityFeed",
+        "title": "SKL: View Activity"
+      },
+      {
+        "command": "skl.upgradeToFull",
+        "title": "SKL: Upgrade to Full SKL"
       }
     ],
     "menus": {
