@@ -5,7 +5,8 @@ import {
   confirmScopeDefinitions,
   rejectScopeDefinitions,
 } from "./commands/index.js";
-import { SKLFileSystem, HookInstaller } from "./services/index.js";
+import { SKLFileSystem, HookInstaller, promoteRFCtoADR } from "./services/index.js";
+import type { Rfc } from "./types/index.js";
 import { SKLDiagnosticsProvider } from "./diagnostics/index.js";
 import { SKLWriteError } from "./errors/index.js";
 import { QueuePanel, generateProposalCount } from "./panels/index.js";
@@ -164,6 +165,120 @@ async function configureAgentCommand(
   }
 }
 
+// ── Command: skl.resolveRFC ──────────────────────────────────────
+
+async function resolveRFCCommand(skl: SKLFileSystem): Promise<void> {
+  // 1. Load all RFC IDs and read each file, skipping unreadable ones
+  const ids = await skl.listRFCs();
+
+  const settled = await Promise.allSettled(
+    ids.map(async (id) => ({ id, rfc: await skl.readRFC(id) })),
+  );
+
+  const openMap = new Map<string, Rfc>();
+  for (const result of settled) {
+    if (result.status === "fulfilled" && result.value.rfc.status === "open") {
+      openMap.set(result.value.id, result.value.rfc);
+    }
+  }
+
+  if (openMap.size === 0) {
+    void vscode.window.showInformationMessage("No open RFCs to resolve.");
+    return;
+  }
+
+  // 2. Pick which RFC to resolve
+  const rfcPick = await vscode.window.showQuickPick(
+    [...openMap.entries()].map(([id, rfc]) => ({
+      label: id,
+      detail: rfc.decision_required,
+    })),
+    { title: "Select RFC to Resolve" },
+  );
+  if (!rfcPick) return;
+
+  const selectedRfc = openMap.get(rfcPick.label)!;
+
+  // 3. Pick resolution option (option_c is optional on the schema)
+  const optionItems: vscode.QuickPickItem[] = [
+    { label: "option_a", detail: selectedRfc.option_a.description },
+    { label: "option_b", detail: selectedRfc.option_b.description },
+  ];
+  if (selectedRfc.option_c) {
+    optionItems.push({
+      label: "option_c",
+      detail: selectedRfc.option_c.description,
+    });
+  }
+
+  const optionPick = await vscode.window.showQuickPick(optionItems, {
+    title: "Select resolution option",
+  });
+  if (!optionPick) return;
+
+  // 4. Human rationale
+  const rationale = await vscode.window.showInputBox({
+    prompt: "Enter your rationale for this decision",
+    validateInput: (v) =>
+      v.trim().length > 0 ? null : "Rationale is required",
+  });
+  if (rationale === undefined || rationale.trim().length === 0) return;
+
+  // 5. Acceptance criterion — at least one required (spec Section 9.3)
+  const criterionRaw = await vscode.window.showInputBox({
+    prompt:
+      "Enter at least one acceptance criterion (format: description | check_type | check_reference)",
+    placeHolder:
+      "e.g. Auth query P95 < 150ms | performance_test | tests/load/auth.py",
+    validateInput: (v) => {
+      if (v.trim().length === 0) {
+        return "At least one acceptance criterion is required";
+      }
+      const parts = v.split("|").map((p) => p.trim());
+      if (parts.length < 3 || parts.some((p) => p.length === 0)) {
+        return "Format: description | check_type | check_reference";
+      }
+      return null;
+    },
+  });
+  if (criterionRaw === undefined || criterionRaw.trim().length === 0) return;
+
+  // 6. Confirm — irreversible
+  const confirm = await vscode.window.showWarningMessage(
+    `Resolve RFC ${rfcPick.label} as ${optionPick.label}? This will promote to ADR and cannot be undone.`,
+    "Confirm",
+    "Cancel",
+  );
+  if (confirm !== "Confirm") return;
+
+  // 7. Apply resolution + promote to ADR
+  const resolvedRfc: Rfc = {
+    ...selectedRfc,
+    resolution: optionPick.label,
+    human_rationale: rationale.trim(),
+    acceptance_criteria: [criterionRaw.trim()],
+  };
+
+  try {
+    const knowledge = await skl.readKnowledge();
+    const { adr } = await promoteRFCtoADR(
+      resolvedRfc,
+      rationale.trim(),
+      knowledge,
+      skl,
+    );
+    void vscode.window.showInformationMessage(
+      `RFC ${rfcPick.label} resolved. ADR ${adr.id} created.`,
+    );
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `SKL: Failed to resolve RFC — ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
 // ── Activation ───────────────────────────────────────────────────
 
 const DEBOUNCE_MS = 300;
@@ -243,6 +358,9 @@ export function activate(context: vscode.ExtensionContext): void {
           ),
           vscode.commands.registerCommand("skl.openQueuePanel", () =>
             QueuePanel.createOrShow(context.extensionUri, skl),
+          ),
+          vscode.commands.registerCommand("skl.resolveRFC", () =>
+            resolveRFCCommand(skl),
           ),
         );
 

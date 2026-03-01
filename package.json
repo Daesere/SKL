@@ -43,6 +43,10 @@
       {
         "command": "skl.openQueuePanel",
         "title": "SKL: Open Queue Panel"
+      },
+      {
+        "command": "skl.resolveRFC",
+        "title": "SKL: Resolve RFC"
       }
     ],
     "menus": {

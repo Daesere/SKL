@@ -1,6 +1,7 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
+import { z } from "zod";
 import type { SKLFileSystem } from "./SKLFileSystem.js";
 import type {
   SessionBudget,
@@ -263,8 +264,6 @@ export class OrchestratorService {
   }
 
   // ── Stubs — implemented in later substages ───────────────────────
-
-  /* eslint-disable @typescript-eslint/no-unused-vars */
 
   /**
    * Review a single proposal and return the decision together with
@@ -638,13 +637,128 @@ export class OrchestratorService {
     }
   }
 
-  // ── Stubs — implemented in later substages ─────────────────────────────────────────────
+  // ── Task Assignment (Section 7.1) ──────────────────────────────────────────
 
-  // TODO: implemented in substage 3.8
-  async runTaskAssignment(
-    _session: OrchestratorSession,
-  ): Promise<string> {
-    throw new Error("Not implemented — substage 3.8");
+  /**
+   * Generate a JSON-serialised task assignment plan for `featureRequest`.
+   *
+   * The human reviews the returned plan before any agent contexts are written —
+   * this function only produces the plan, it does not apply it.
+   *
+   * Returns `"[]"` (and logs a warning) when the LLM is unavailable or the
+   * response cannot be parsed. Never throws.
+   */
+  async runTaskAssignment(featureRequest: string): Promise<string> {
+    // Per-call schema for the LLM response items
+    const TaskAssignmentSchema = z.object({
+      agent_id: z.string(),
+      semantic_scope: z.string(),
+      file_scope: z.array(z.string()),
+      task_description: z.string(),
+      assignment_rationale: z.string(),
+    });
+    type TaskAssignment = z.infer<typeof TaskAssignmentSchema>;
+
+    const [knowledge, scopeDefinitions] = await Promise.all([
+      this.sklFileSystem.readKnowledge(),
+      this.sklFileSystem.readScopeDefinitions(),
+    ]);
+
+    const adrIds = await this.sklFileSystem.listADRs();
+    const adrs = await Promise.all(
+      adrIds.map((id) => this.sklFileSystem.readADR(id)),
+    );
+
+    const validScopeKeys = new Set(
+      Object.keys(scopeDefinitions.scope_definitions.scopes),
+    );
+    const scopeSummary = Object.entries(scopeDefinitions.scope_definitions.scopes)
+      .map(([key, entry]) => `  ${key}: ${entry.description}`)
+      .join("\n");
+
+    const prompt = [
+      `Feature request: ${featureRequest}`,
+      "",
+      "Current state records:",
+      JSON.stringify(knowledge.state, null, 2),
+      "",
+      "Available semantic scopes:",
+      scopeSummary,
+      "",
+      "Resolved architectural decisions (ADRs — do not re-litigate these):",
+      JSON.stringify(adrs, null, 2),
+      "",
+      "Respond ONLY with a JSON array of task assignment objects, each with:",
+      '  "agent_id": string',
+      `  "semantic_scope": one of [${[...validScopeKeys].join(", ")}]`,
+      '  "file_scope": string[]',
+      '  "task_description": string',
+      '  "assignment_rationale": string',
+      "",
+      "Output ONLY the raw JSON array — no markdown fences, no extra text.",
+    ].join("\n");
+
+    const models = await vscode.lm.selectChatModels({ family: "gpt-4o" });
+    if (models.length === 0) {
+      this.outputChannel.appendLine(
+        "[OrchestratorService] LLM unavailable for task assignment — returning empty plan.",
+      );
+      return "[]";
+    }
+
+    const model = models[0]!;
+    try {
+      const response = await model.sendRequest(
+        [vscode.LanguageModelChatMessage.User(prompt)],
+        {},
+      );
+      let text = "";
+      for await (const chunk of response.text) {
+        text += chunk;
+      }
+
+      let raw: unknown;
+      try {
+        raw = JSON.parse(text.trim());
+      } catch {
+        this.outputChannel.appendLine(
+          `[OrchestratorService] Task assignment: LLM returned non-JSON — ${text.trim().slice(0, 200)}`,
+        );
+        return "[]";
+      }
+
+      if (!Array.isArray(raw)) {
+        this.outputChannel.appendLine(
+          "[OrchestratorService] Task assignment: LLM response is not a JSON array.",
+        );
+        return "[]";
+      }
+
+      const validAssignments: TaskAssignment[] = [];
+      for (const item of raw) {
+        const parsed = TaskAssignmentSchema.safeParse(item);
+        if (!parsed.success) {
+          this.outputChannel.appendLine(
+            `[OrchestratorService] Task assignment: malformed item dropped — ${JSON.stringify(item)}`,
+          );
+          continue;
+        }
+        if (!validScopeKeys.has(parsed.data.semantic_scope)) {
+          this.outputChannel.appendLine(
+            `[OrchestratorService] Task assignment: unknown scope '${parsed.data.semantic_scope}' — dropped.`,
+          );
+          continue;
+        }
+        validAssignments.push(parsed.data);
+      }
+
+      return JSON.stringify(validAssignments);
+    } catch {
+      this.outputChannel.appendLine(
+        "[OrchestratorService] Task assignment: LLM request failed — returning empty plan.",
+      );
+      return "[]";
+    }
   }
 
   // ── Session runner (Section 7.1) ──────────────────────────────────────────
