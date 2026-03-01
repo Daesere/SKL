@@ -119,6 +119,38 @@ ADR promotion. uncertainty_level reduction via passing tests.
 
 ---
 
+## Stage 6 — Phase 0 Mode and Adoption Tooling ⏳
+
+**Goal:** Lower the onboarding barrier by introducing Phase 0 — a reduced-
+friction mode that requires no scope definitions. Existing full SKL behaviour
+is unchanged. Every change in this stage is additive.
+
+### Substages
+- 6.1 HookConfig skl_mode field, hook Phase 0 gating, skl.upgradeToFull stub
+- 6.2 skl.initPhase0 command, Setup Wizard mode selection, Activity Feed panel
+- 6.3 CLI package: skl status, skl log, skl init, skl upgrade, skl help
+- 6.4 README rewrite for early adopter audience
+- 6.5 Final wiring, full verification, and push
+
+### Completion Criteria
+- A repo with no skl_mode field behaves identically to pre-Stage-6 (regression)
+- Phase 0 hook skips checks 2, 6, and 7; queue_max is 50
+- Phase 0 summary line reads "SKL Phase 0: N activity record(s) logged."
+- skl.initPhase0 creates .skl/ with skl_mode: "phase_0" in under 60 seconds
+- skl.upgradeToFull requires scope_definitions.json to be present
+- Setup Wizard welcome screen shows Phase 0 and Full SKL mode cards
+- Activity Feed panel renders proposals as plain English with no JSON field names
+- Activity Feed auto-opens on activation when skl_mode is phase_0
+- Status bar reads "SKL Phase 0: N logged" in Phase 0; existing text in full mode
+- skl status CLI prints queue size, state count, mode, and 5 most recent proposals
+- skl log supports --agent, --scope, --limit, and --pending filters
+- skl init creates .skl/ interactively with tech stack pre-population
+- skl upgrade requires scope_definitions.json to proceed
+- npm run lint clean, all TypeScript and CLI TypeScript compile under strict mode
+- python3 hook/test_hook_checks.py passes with Phase 0 regression tests included
+
+---
+
 ## Implementation Complete
 
 All four stages of the SKL v1.4 reference specification are implemented.
