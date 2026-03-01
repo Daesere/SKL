@@ -100,3 +100,14 @@ export type {
   SessionBudget,
   OrchestratorSession,
 } from "./OrchestratorSession.js";
+
+// ClassificationResult (Section 6.1)
+import { z } from "zod";
+import { ChangeTypeSchema } from "./shared.js";
+
+export const ClassificationResultSchema = z.object({
+  resolved_change_type: ChangeTypeSchema,
+  stage1_override: z.boolean(),
+  override_reason: z.string().nullable(),
+});
+export type ClassificationResult = z.infer<typeof ClassificationResultSchema>;

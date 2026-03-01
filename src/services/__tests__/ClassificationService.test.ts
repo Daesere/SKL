@@ -1,0 +1,208 @@
+/**
+ * ClassificationService.test.ts
+ *
+ * Tests for Stage 1 deterministic override rules (Section 6.1).
+ *
+ * Run with:
+ *   npx tsx src/services/__tests__/ClassificationService.test.ts
+ */
+
+import { applyStage1Overrides } from "../ClassificationService.js";
+import type { QueueProposal, RiskSignals, ChangeType } from "../../types/index.js";
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+/** Baseline risk signals — everything false / neutral. */
+function defaultRiskSignals(overrides: Partial<RiskSignals> = {}): RiskSignals {
+  return {
+    touched_auth_or_permission_patterns: false,
+    public_api_signature_changed: false,
+    invariant_referenced_file_modified: false,
+    high_fan_in_module_modified: false,
+    ast_change_type: "mechanical",
+    mechanical_only: false,
+    ...overrides,
+  };
+}
+
+/** Minimal valid QueueProposal with overridable fields. */
+function makeProposal(overrides: {
+  change_type?: ChangeType;
+  cross_scope_flag?: boolean;
+  risk_signals?: Partial<RiskSignals>;
+} = {}): QueueProposal {
+  return {
+    proposal_id: "test-001",
+    agent_id: "agent-a",
+    path: "src/foo.ts",
+    semantic_scope: "core",
+    scope_schema_version: "1.0.0",
+    change_type: overrides.change_type ?? "mechanical",
+    responsibilities: "handles foo logic",
+    dependencies: [],
+    invariants_touched: [],
+    assumptions: [],
+    uncertainty_delta: "+0",
+    rationale: "test proposal",
+    out_of_scope: false,
+    cross_scope_flag: overrides.cross_scope_flag ?? false,
+    branch: "feat/test",
+    risk_signals: defaultRiskSignals(overrides.risk_signals),
+    classification_verification: {
+      agent_classification: overrides.change_type ?? "mechanical",
+      verifier_classification: "mechanical",
+      agreement: true,
+      stage1_override: false,
+    },
+    dependency_scan: {
+      undeclared_imports: [],
+      stale_declared_deps: [],
+      cross_scope_undeclared: [],
+    },
+    agent_reasoning_summary: "",
+    status: "pending",
+    submitted_at: new Date().toISOString(),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test runner                                                        */
+/* ------------------------------------------------------------------ */
+
+let passed = 0;
+let failed = 0;
+
+function assert(condition: boolean, label: string): void {
+  if (condition) {
+    passed++;
+    console.log(`  ✔  ${label}`);
+  } else {
+    failed++;
+    console.error(`  ✘  FAIL: ${label}`);
+  }
+}
+
+console.log("ClassificationService — Stage 1 overrides\n");
+
+/* ------------------------------------------------------------------ */
+/*  Test 1: Rule 1 — mechanical_only true, all other signals false     */
+/* ------------------------------------------------------------------ */
+{
+  const result = applyStage1Overrides(
+    makeProposal({ change_type: "mechanical", risk_signals: { mechanical_only: true } }),
+  );
+  assert(result.resolved_change_type === "mechanical", "Test 1: resolved to mechanical");
+  assert(result.stage1_override === true, "Test 1: stage1_override is true");
+  assert(result.override_reason === "AST confirms mechanical-only change", "Test 1: correct reason");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 2: Rule 1 wins over cross_scope_flag                         */
+/* ------------------------------------------------------------------ */
+{
+  const result = applyStage1Overrides(
+    makeProposal({
+      change_type: "mechanical",
+      cross_scope_flag: true,
+      risk_signals: { mechanical_only: true },
+    }),
+  );
+  assert(result.resolved_change_type === "mechanical", "Test 2: stays mechanical despite cross_scope_flag");
+  assert(result.stage1_override === true, "Test 2: stage1_override is true");
+  assert(result.override_reason === "AST confirms mechanical-only change", "Test 2: Rule 1 reason");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 3: Rule 2 — single risk signal contradicts mechanical         */
+/* ------------------------------------------------------------------ */
+{
+  const result = applyStage1Overrides(
+    makeProposal({
+      change_type: "mechanical",
+      risk_signals: { touched_auth_or_permission_patterns: true },
+    }),
+  );
+  assert(result.resolved_change_type === "behavioral", "Test 3: overridden to behavioral");
+  assert(result.stage1_override === true, "Test 3: stage1_override is true");
+  assert(
+    result.override_reason !== null &&
+    result.override_reason.includes("touched_auth_or_permission_patterns"),
+    "Test 3: reason mentions touched_auth_or_permission_patterns",
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 4: Rule 2 — two risk signals, reason lists both               */
+/* ------------------------------------------------------------------ */
+{
+  const result = applyStage1Overrides(
+    makeProposal({
+      change_type: "mechanical",
+      risk_signals: {
+        public_api_signature_changed: true,
+        touched_auth_or_permission_patterns: true,
+      },
+    }),
+  );
+  assert(result.resolved_change_type === "behavioral", "Test 4: overridden to behavioral");
+  assert(result.stage1_override === true, "Test 4: stage1_override is true");
+  assert(
+    result.override_reason !== null &&
+    result.override_reason.includes("touched_auth_or_permission_patterns") &&
+    result.override_reason.includes("public_api_signature_changed"),
+    "Test 4: reason lists both signals",
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 5: Rule 3 — cross_scope_flag, agent says mechanical           */
+/* ------------------------------------------------------------------ */
+{
+  const result = applyStage1Overrides(
+    makeProposal({
+      change_type: "mechanical",
+      cross_scope_flag: true,
+    }),
+  );
+  assert(result.resolved_change_type === "behavioral", "Test 5: overridden to behavioral");
+  assert(result.stage1_override === true, "Test 5: stage1_override is true");
+  assert(
+    result.override_reason === "Cross-scope modification cannot be mechanical",
+    "Test 5: correct reason",
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 6: Rule 4 — agent says behavioral, no signals                 */
+/* ------------------------------------------------------------------ */
+{
+  const result = applyStage1Overrides(
+    makeProposal({ change_type: "behavioral" }),
+  );
+  assert(result.resolved_change_type === "behavioral", "Test 6: behavioral unchanged");
+  assert(result.stage1_override === false, "Test 6: no override");
+  assert(result.override_reason === null, "Test 6: no reason");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 7: Rule 4 — agent says architectural, no signals              */
+/* ------------------------------------------------------------------ */
+{
+  const result = applyStage1Overrides(
+    makeProposal({ change_type: "architectural" }),
+  );
+  assert(result.resolved_change_type === "architectural", "Test 7: architectural unchanged");
+  assert(result.stage1_override === false, "Test 7: no override");
+  assert(result.override_reason === null, "Test 7: no reason");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Summary                                                            */
+/* ------------------------------------------------------------------ */
+
+console.log(`\n${passed} passed, ${failed} failed out of ${passed + failed}`);
+if (failed > 0) {
+  process.exit(1);
+}
