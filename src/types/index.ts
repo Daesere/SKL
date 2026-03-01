@@ -182,3 +182,14 @@ export const ProposalReviewResultSchema = z.object({
   merge_conflict: z.boolean(),
 });
 export type ProposalReviewResult = z.infer<typeof ProposalReviewResultSchema>;
+
+// CICheckResult (Section 9.3 / 3.2.3)
+export const CICheckResultSchema = z.object({
+  state_record_id: z.string(),
+  test_reference: z.string(),
+  passed: z.boolean(),
+  exit_code: z.number().int(),
+  output: z.string(),
+  checked_at: z.string().datetime(),
+});
+export type CICheckResult = z.infer<typeof CICheckResultSchema>;
