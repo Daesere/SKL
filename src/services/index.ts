@@ -3,6 +3,10 @@ export { HookInstaller } from "./HookInstaller.js";
 export { OrchestratorService } from "./OrchestratorService.js";
 export { VerifierService } from "./VerifierService.js";
 export {
+  detectStateConflict,
+  isUncertaintyLevel3,
+} from "./ConflictDetectionService.js";
+export {
   applyStage1Overrides,
   requiresMandatoryIndividualReview,
   isEligibleForAutoApproval,

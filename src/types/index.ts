@@ -120,3 +120,13 @@ export const VerifierResultSchema = z.object({
   resolved_classification: ChangeTypeSchema,
 });
 export type VerifierResult = z.infer<typeof VerifierResultSchema>;
+
+// StateConflictResult (Section 7.2)
+import { StateRecordSchema } from "./StateRecord.js";
+
+export const StateConflictResultSchema = z.object({
+  has_conflict: z.boolean(),
+  conflicting_record: StateRecordSchema.nullable(),
+  conflict_description: z.string().nullable(),
+});
+export type StateConflictResult = z.infer<typeof StateConflictResultSchema>;
