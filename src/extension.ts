@@ -174,30 +174,40 @@ async function configureAgentCommand(
   }
 
   // Step 2 — Semantic scope
+  let semanticScope: string;
   let scopeDefs;
   try {
     scopeDefs = await skl.readScopeDefinitions();
   } catch {
-    void vscode.window.showErrorMessage(
-      "SKL: Could not read scope_definitions.json. " +
-        "Run 'SKL: Generate Scope Definitions' first.",
-    );
-    return;
+    scopeDefs = null;
   }
 
-  const scopes = scopeDefs.scope_definitions.scopes;
-  const items: vscode.QuickPickItem[] = Object.entries(scopes).map(
-    ([key, entry]) => ({
-      label: key,
-      detail: entry.description,
-    }),
-  );
-
-  const picked = await vscode.window.showQuickPick(items, {
-    title: "Select semantic scope for this agent",
-  });
-  if (!picked) {
-    return;
+  if (scopeDefs !== null) {
+    const scopes = scopeDefs.scope_definitions.scopes;
+    const items: vscode.QuickPickItem[] = Object.entries(scopes).map(
+      ([key, entry]) => ({
+        label: key,
+        detail: entry.description,
+      }),
+    );
+    const picked = await vscode.window.showQuickPick(items, {
+      title: "Select semantic scope for this agent",
+    });
+    if (!picked) {
+      return;
+    }
+    semanticScope = picked.label;
+  } else {
+    // No scope_definitions.json yet (e.g. Phase 0) — allow free-text entry.
+    const typed = await vscode.window.showInputBox({
+      prompt: "Semantic scope name (e.g. backend, frontend, infra)",
+      placeHolder:
+        "Scope validation will be skipped until scope_definitions.json is generated",
+    });
+    if (!typed) {
+      return;
+    }
+    semanticScope = typed.trim();
   }
 
   // Step 3 — File scope
@@ -217,7 +227,7 @@ async function configureAgentCommand(
 
   // Step 4 — Confirm
   const summary =
-    `Agent: ${agentId}\nScope: ${picked.label}\nFiles: ${
+    `Agent: ${agentId}\nScope: ${semanticScope}\nFiles: ${
       fileScope.length > 0 ? fileScope.join(", ") : "(all in scope)"
     }`;
   const confirm = await vscode.window.showInformationMessage(
@@ -232,7 +242,7 @@ async function configureAgentCommand(
   // Write agent context
   const ctx: AgentContext = {
     agent_id: agentId,
-    semantic_scope: picked.label,
+    semantic_scope: semanticScope,
     file_scope: fileScope,
     session_start: new Date().toISOString(),
     circuit_breaker_count: 0,
