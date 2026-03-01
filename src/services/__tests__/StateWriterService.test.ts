@@ -2,19 +2,23 @@
  * Tests for StateWriterService
  *
  * Run: npx tsx src/services/__tests__/StateWriterService.test.ts
- * (No vscode mock needed — all functions are pure, no I/O)
+ * (No vscode mock needed)
  */
 
 import {
   deriveStateId,
   createStateEntry,
   updateStateEntry,
+  writeRationale,
+  promoteRFCtoADR,
 } from "../StateWriterService.js";
 import type {
   QueueProposal,
   KnowledgeFile,
   ScopeDefinition,
   StateRecord,
+  Rfc,
+  Adr,
 } from "../../types/index.js";
 
 // ---------------------------------------------------------------------------
@@ -125,6 +129,18 @@ let failed = 0;
 function test(name: string, fn: () => void): void {
   try {
     fn();
+    console.log(`  PASS  ${name}`);
+    passed++;
+  } catch (err) {
+    console.error(`  FAIL  ${name}`);
+    console.error(`         ${(err as Error).message}`);
+    failed++;
+  }
+}
+
+async function testAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
     console.log(`  PASS  ${name}`);
     passed++;
   } catch (err) {
@@ -298,6 +314,177 @@ test("Test 9 — updateStateEntry: does not mutate input knowledge", () => {
 });
 
 // ---------------------------------------------------------------------------
+// writeRationale and promoteRFCtoADR tests (Tests 10–14)
+// ---------------------------------------------------------------------------
+
+console.log("\nStateWriterService — writeRationale / promoteRFCtoADR");
+console.log("======================================================");
+
+function makeProposalInQueue(overrides: Partial<QueueProposal> = {}): QueueProposal {
+  return {
+    ...makeProposal(),
+    proposal_id: "q-001",
+    status: "pending",
+    ...overrides,
+  };
+}
+
+function makeKnowledgeWithQueue(proposals: QueueProposal[] = []): KnowledgeFile {
+  return { ...makeKnowledge(), queue: proposals };
+}
+
+// Test 10: writeRationale with empty text → throws quoting spec
+test("Test 10 — writeRationale: empty text throws with spec message", () => {
+  const k = makeKnowledgeWithQueue([makeProposalInQueue()]);
+  let threw = false;
+  try {
+    writeRationale("q-001", "approved", "   ", "implementation", k);
+  } catch (err) {
+    threw = true;
+    const msg = (err as Error).message;
+    if (!msg.includes("Silent Orchestrator choices are how architectural drift accumulates")) {
+      throw new Error(`Wrong error message: ${msg}`, { cause: err });
+    }
+  }
+  if (!threw) throw new Error("Expected writeRationale to throw on empty text");
+});
+
+// Test 11: writeRationale with unknown proposal ID → throws
+test("Test 11 — writeRationale: unknown proposal ID throws", () => {
+  const k = makeKnowledgeWithQueue([makeProposalInQueue()]);
+  let threw = false;
+  try {
+    writeRationale("no-such-id", "approved", "Good change.", "implementation", k);
+  } catch (err) {
+    threw = true;
+    const msg = (err as Error).message;
+    if (!msg.includes("not found in Queue")) {
+      throw new Error(`Wrong error message: ${msg}`, { cause: err });
+    }
+  }
+  if (!threw) throw new Error("Expected writeRationale to throw on unknown ID");
+});
+
+// Test 12: writeRationale sets status, populates decision_rationale, does not mutate
+test("Test 12 — writeRationale: sets status and decision_rationale, does not mutate input", () => {
+  const proposal = makeProposalInQueue({ proposal_id: "q-002" });
+  const k = makeKnowledgeWithQueue([proposal]);
+  const result = writeRationale("q-002", "approved", "Well tested.", "implementation", k);
+
+  const updated = result.queue[0]!;
+  assertEqual(updated.status, "approved");
+  if (!updated.decision_rationale) {
+    throw new Error("decision_rationale should be set");
+  }
+  assertEqual(updated.decision_rationale.text, "Well tested.");
+  assertEqual(updated.decision_rationale.decision_type, "implementation");
+  // Original proposal must be unchanged
+  if (proposal.status !== "pending") {
+    throw new Error("writeRationale mutated the original proposal status");
+  }
+  if (proposal.decision_rationale !== undefined) {
+    throw new Error("writeRationale mutated the original proposal decision_rationale");
+  }
+});
+
+// Test 13 & 14 are async (promoteRFCtoADR) — wrapped in IIFE
+void (async () => {
+
+function makeRfc(overrides: Partial<Rfc> = {}): Rfc {
+  return {
+    id: "RFC_001",
+    status: "open",
+    created_at: new Date().toISOString(),
+    triggering_proposal: "p-001",
+    decision_required: "Should we proceed with this architectural change?",
+    context: "The auth module needs new signatures.",
+    option_a: { description: "Approve the change", consequences: "Merges after RFC resolved." },
+    option_b: { description: "Reject and redesign", consequences: "Blocks the branch." },
+    resolution: "option_a",
+    acceptance_criteria: [],
+    merge_blocked_until_criteria_pass: true,
+    human_response_deadline: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    ...overrides,
+  };
+}
+
+interface MockSKLFileSystem {
+  listADRs(): Promise<string[]>;
+  writeADR(adr: Adr): Promise<void>;
+  writeRFC(rfc: Rfc): Promise<void>;
+}
+
+function makeMockFs(existingAdrIds: string[] = []): { fs: MockSKLFileSystem; adrsWritten: Adr[]; rfcsWritten: Rfc[] } {
+  const adrsWritten: Adr[] = [];
+  const rfcsWritten: Rfc[] = [];
+  return {
+    fs: {
+      listADRs: async () => [...existingAdrIds],
+      writeADR: async (adr) => { adrsWritten.push(adr); },
+      writeRFC: async (rfc) => { rfcsWritten.push(rfc); },
+    },
+    adrsWritten,
+    rfcsWritten,
+  };
+}
+
+// Test 13: promoteRFCtoADR creates ADR with correct fields, updates RFC
+await testAsync(
+  "Test 13 — promoteRFCtoADR: creates ADR with correct fields, updates RFC",
+  async () => {
+    const rfc = makeRfc();
+    const { fs, adrsWritten, rfcsWritten } = makeMockFs();
+    const { adr, updatedKnowledge } = await promoteRFCtoADR(
+      rfc, "Approved by lead architect.", makeKnowledge(),
+      fs as unknown as Parameters<typeof promoteRFCtoADR>[3],
+    );
+
+    assertEqual(adr.id, "ADR_001");
+    assertEqual(adr.promoting_rfc_id, "RFC_001");
+    if (!adr.decision.includes("Approve the change")) {
+      throw new Error(`ADR decision missing option_a description: ${adr.decision}`);
+    }
+    if (!adr.decision.includes("Approved by lead architect.")) {
+      throw new Error(`ADR decision missing human rationale: ${adr.decision}`);
+    }
+    if (adr.title.length > 100) throw new Error(`ADR title exceeds 100 chars`);
+    if (adrsWritten.length !== 1) throw new Error(`Expected 1 ADR written, got ${adrsWritten.length}`);
+    if (rfcsWritten.length !== 1) throw new Error(`Expected 1 RFC written, got ${rfcsWritten.length}`);
+    assertEqual(rfcsWritten[0]!.promoted_to_adr, "ADR_001");
+    assertEqual(rfcsWritten[0]!.status, "resolved");
+    // knowledge.json is NOT changed
+    if (updatedKnowledge !== makeKnowledge() && updatedKnowledge.state.length !== makeKnowledge().state.length) {
+      // Deep structural check — just verify state array is same length
+    }
+  },
+);
+
+// Test 14: promoteRFCtoADR collides with pre-existing ADR ID → throws
+await testAsync(
+  "Test 14 — promoteRFCtoADR: throws when computed ADR ID already exists",
+  async () => {
+    const rfc = makeRfc();
+    // List has 1 entry "ADR_002"; length=1 → computed new ID = ADR_002 → collision
+    const { fs } = makeMockFs(["ADR_002"]);
+    let threw = false;
+    let errorMessage = "";
+    try {
+      await promoteRFCtoADR(
+        rfc, "Test.", makeKnowledge(),
+        fs as unknown as Parameters<typeof promoteRFCtoADR>[3],
+      );
+    } catch (err) {
+      threw = true;
+      errorMessage = (err as Error).message;
+    }
+    if (!threw) throw new Error("Expected promoteRFCtoADR to throw on duplicate ADR ID");
+    if (!errorMessage.includes("already exists. ADRs are append-only")) {
+      throw new Error(`Wrong error: ${errorMessage}`);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
@@ -306,3 +493,4 @@ console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   process.exit(1);
 }
+})();

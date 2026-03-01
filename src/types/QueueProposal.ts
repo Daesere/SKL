@@ -8,6 +8,17 @@ import {
 } from "./shared.js";
 
 /**
+ * Orchestrator-recorded decision rationale (Section 7.4).
+ * Inline here (not imported from index.ts) to avoid circular dependency.
+ */
+export const RationaleRecordSchema = z.object({
+  decision_type: z.enum(["implementation", "architectural"]),
+  text: z.string().min(1),
+  recorded_at: z.string().datetime(),
+});
+export type RationaleRecord = z.infer<typeof RationaleRecordSchema>;
+
+/**
  * Queue Proposal Status
  */
 export const ProposalStatusSchema = z.union([
@@ -98,6 +109,13 @@ export const QueueProposalSchema = z.object({
 
   /** ISO 8601 datetime when the proposal was submitted. */
   submitted_at: z.string().datetime(),
+
+  /**
+   * Orchestrator-recorded decision rationale (Section 7.4).
+   * Named `decision_rationale` to avoid conflict with the agent-submitted
+   * `rationale: string` field above. Populated by writeRationale().
+   */
+  decision_rationale: RationaleRecordSchema.optional(),
 });
 
 export type QueueProposal = z.infer<typeof QueueProposalSchema>;

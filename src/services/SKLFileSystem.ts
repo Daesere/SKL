@@ -5,6 +5,7 @@ import {
   KnowledgeFileSchema,
   ScopeDefinitionSchema,
   RfcSchema,
+  AdrSchema,
   SessionLogSchema,
   AgentContextSchema,
   HookConfigSchema,
@@ -14,6 +15,7 @@ import type {
   KnowledgeFile,
   ScopeDefinition,
   Rfc,
+  Adr,
   SessionLog,
   AgentContext,
   HookConfig,
@@ -480,6 +482,72 @@ export class SKLFileSystem {
     let entries: string[];
     try {
       entries = await fs.readdir(this.rfcsDir);
+    } catch (err) {
+      if (isFsError(err, "ENOENT")) return [];
+      throw err;
+    }
+
+    return entries
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => f.replace(/\.json$/, ""))
+      .sort();
+  }
+
+  // ── ADRs (read / write / list) ────────────────────────────────────
+
+  /** Resolved path to the adrs directory. */
+  private get adrsDir(): string {
+    return path.join(this.sklDir, "adrs");
+  }
+
+  /** Resolved path to a specific ADR file. */
+  private adrPath(id: string): string {
+    return path.join(this.adrsDir, `${id}.json`);
+  }
+
+  /**
+   * Read and validate a single ADR by ID.
+   *
+   * @throws SKLFileNotFoundError — ADR file absent
+   * @throws SKLValidationError   — JSON present but fails Zod
+   */
+  async readADR(id: string): Promise<Adr> {
+    const filePath = this.adrPath(id);
+    const json = await readJsonFile(filePath);
+    const result = AdrSchema.safeParse(json);
+
+    if (!result.success) {
+      throw new SKLValidationError(filePath, result.error);
+    }
+
+    return result.data;
+  }
+
+  /**
+   * Atomically write an ADR to .skl/adrs/{adr.id}.json.
+   *
+   * @throws SKLValidationError — payload fails pre-write Zod check
+   * @throws SKLWriteError      — I/O failure
+   */
+  async writeADR(adr: Adr): Promise<void> {
+    const filePath = this.adrPath(adr.id);
+    const result = AdrSchema.safeParse(adr);
+    if (!result.success) {
+      throw new SKLValidationError(filePath, result.error);
+    }
+
+    const serialized = JSON.stringify(result.data, null, 2) + "\n";
+    await atomicWrite(filePath, serialized);
+  }
+
+  /**
+   * List all ADR IDs (filenames without .json) sorted alphabetically.
+   * Returns an empty array when the adrs/ directory is empty or absent.
+   */
+  async listADRs(): Promise<string[]> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.adrsDir);
     } catch (err) {
       if (isFsError(err, "ENOENT")) return [];
       throw err;

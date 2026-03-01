@@ -160,3 +160,7 @@ export const RFCTriggerReasonSchema = z.enum([
   "shared_assumption_conflict",
 ]);
 export type RFCTriggerReason = z.infer<typeof RFCTriggerReasonSchema>;
+
+// RationaleRecord (Section 7.4) — re-exported from QueueProposal.ts to avoid circular dep.
+export { RationaleRecordSchema } from "./QueueProposal.js";
+export type { RationaleRecord } from "./QueueProposal.js";

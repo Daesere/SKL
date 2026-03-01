@@ -1,17 +1,14 @@
 /**
- * StateWriterService — pure state mutation helpers (Section 3.2)
+ * StateWriterService — pure state mutation helpers (Section 3.2, 7.4, 9.5)
  *
- * Every function in this file is pure: it takes data in and returns a
- * new KnowledgeFile out. No I/O, no LLM calls.
+ * createStateEntry, updateStateEntry, writeRationale: pure — no I/O.
+ * promoteRFCtoADR: async, performs I/O via injected SKLFileSystem.
  *
  * uncertainty_level rules (Section 3.2.3):
  *   - New entries always start at 2 (Proposed). No exceptions.
  *   - Updates reset level 0 or 1 to 2 (a code change resets to Proposed).
  *   - Level 2 updates keep it at 2.
  *   - Level 3 (Contested) is NEVER modified by the Orchestrator.
- *
- * The session runner (Substage 3.8) collects the returned KnowledgeFile
- * objects and performs a single atomic disk write at the end.
  *
  * NOTE: This file is excluded from the project-wide path ban so that
  * deriveStateId may call path.normalize(). No other fs/path usage is
@@ -24,7 +21,11 @@ import type {
   KnowledgeFile,
   ScopeDefinition,
   StateRecord,
+  Rfc,
+  Adr,
+  RationaleRecord,
 } from "../types/index.js";
+import type { SKLFileSystem } from "./SKLFileSystem.js";
 
 // ─── ID derivation ────────────────────────────────────────────────────────────
 
@@ -176,4 +177,129 @@ export function updateStateEntry(
       r.id === existing.id ? updatedRecord : r,
     ),
   };
+}
+
+// ─── Rationale recording (Section 7.4) ───────────────────────────────────────
+
+/**
+ * Record the Orchestrator's decision rationale on a Queue proposal.
+ *
+ * Sets the proposal's status to `decision` and attaches a structured
+ * RationaleRecord. Returns a new KnowledgeFile — does NOT mutate input.
+ *
+ * @throws Error if proposalId is not in knowledge.queue
+ * @throws Error if rationaleText is empty (silent decisions create drift)
+ */
+export function writeRationale(
+  proposalId: string,
+  decision: string,
+  rationaleText: string,
+  decisionType: "implementation" | "architectural",
+  knowledge: KnowledgeFile,
+): KnowledgeFile {
+  const proposalIndex = knowledge.queue.findIndex(
+    (p) => p.proposal_id === proposalId,
+  );
+  if (proposalIndex === -1) {
+    throw new Error(
+      `writeRationale: proposal ${proposalId} not found in Queue`,
+    );
+  }
+
+  if (rationaleText.trim().length === 0) {
+    throw new Error(
+      `writeRationale: rationale text is required for proposal ${proposalId}. ` +
+        `Silent Orchestrator choices are how architectural drift accumulates.`,
+    );
+  }
+
+  const rationaleRecord: RationaleRecord = {
+    decision_type: decisionType,
+    text: rationaleText,
+    recorded_at: new Date().toISOString(),
+  };
+
+  const updatedProposal: QueueProposal = {
+    ...knowledge.queue[proposalIndex]!,
+    status: decision as QueueProposal["status"],
+    decision_rationale: rationaleRecord,
+  };
+
+  return {
+    ...knowledge,
+    queue: knowledge.queue.map((p, i) =>
+      i === proposalIndex ? updatedProposal : p,
+    ),
+  };
+}
+
+// ─── RFC → ADR promotion (Section 9.5) ───────────────────────────────────────
+
+/** Maximum character length for an ADR title. */
+const ADR_TITLE_MAX_LENGTH = 100;
+
+/**
+ * Promote a resolved RFC to an Architecture Decision Record.
+ *
+ * Writes the new ADR, then updates the RFC with `promoted_to_adr` and
+ * `status: "resolved"`. ADRs are append-only — throws if the derived
+ * ID already exists.
+ *
+ * Returns the new ADR and the unchanged KnowledgeFile (ADR promotion
+ * does not modify knowledge.json directly).
+ */
+export async function promoteRFCtoADR(
+  rfc: Rfc,
+  humanRationale: string,
+  knowledge: KnowledgeFile,
+  sklFileSystem: SKLFileSystem,
+): Promise<{ adr: Adr; updatedKnowledge: KnowledgeFile }> {
+  // Step 1: Assign ADR ID
+  const existingAdrIds = await sklFileSystem.listADRs();
+  const adrId = `ADR_${String(existingAdrIds.length + 1).padStart(3, "0")}`;
+
+  // Step 2: Guard — ADRs are append-only
+  if (existingAdrIds.includes(adrId)) {
+    throw new Error(`ADR ${adrId} already exists. ADRs are append-only.`);
+  }
+
+  // Step 3: Resolve the chosen option
+  const resolution = rfc.resolution;
+  const optionMap: Record<string, { description: string; consequences: string } | undefined> = {
+    option_a: rfc.option_a,
+    option_b: rfc.option_b,
+    option_c: rfc.option_c,
+  };
+  const chosenOption = resolution ? optionMap[resolution] : undefined;
+
+  // Step 4: Construct the ADR
+  const rawTitle = `Decision: ${rfc.decision_required}`;
+  const adr: Adr = {
+    id: adrId,
+    created_at: new Date().toISOString(),
+    title: rawTitle.length > ADR_TITLE_MAX_LENGTH
+      ? rawTitle.slice(0, ADR_TITLE_MAX_LENGTH)
+      : rawTitle,
+    context: rfc.context,
+    decision:
+      (chosenOption?.description ?? "") +
+      "\n\nHuman rationale: " +
+      humanRationale,
+    consequences: chosenOption?.consequences ?? "",
+    ...(rfc.id ? { promoting_rfc_id: rfc.id } : {}),
+  };
+
+  // Step 5: Write the ADR
+  await sklFileSystem.writeADR(adr);
+
+  // Step 6: Update and write the RFC
+  const updatedRfc: Rfc = {
+    ...rfc,
+    promoted_to_adr: adrId,
+    status: "resolved",
+  };
+  await sklFileSystem.writeRFC(updatedRfc);
+
+  // ADR promotion does not change knowledge.json
+  return { adr, updatedKnowledge: knowledge };
 }
