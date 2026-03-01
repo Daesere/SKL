@@ -166,6 +166,79 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // ── Test 9: getNextSessionId on empty orchestrator_log/ ────────
+  console.log("\n=== Test 9: getNextSessionId on empty orchestrator_log/ ===");
+  // ensureSKLStructure already ran above, so orchestrator_log/ exists but is empty
+  await skl.ensureSKLStructure();
+  const nextId = await skl.getNextSessionId();
+  if (nextId === "session_001") {
+    console.log(`PASS — getNextSessionId() returned "${nextId}" on empty dir`);
+  } else {
+    console.error(`FAIL — expected "session_001", got "${nextId}"`);
+    process.exit(1);
+  }
+
+  // ── Test 10: readMostRecentSessionLog returns null on empty dir ─
+  console.log("\n=== Test 10: readMostRecentSessionLog on empty dir ===");
+  const recentLog = await skl.readMostRecentSessionLog();
+  if (recentLog === null) {
+    console.log("PASS — readMostRecentSessionLog() returned null without throwing");
+  } else {
+    console.error("FAIL — expected null, got:", recentLog);
+    process.exit(1);
+  }
+
+  // ── Test 11: isSessionBudgetExceeded — proposals_reviewed at max ─
+  console.log("\n=== Test 11: isSessionBudgetExceeded — proposals at max ===");
+  const { OrchestratorService } = await import("./services/index.js");
+  const { DEFAULT_SESSION_BUDGET: budget } = await import("./types/index.js");
+
+  // Minimal vscode.ExtensionContext stub for construction
+  const fakeContext = {} as import("vscode").ExtensionContext;
+  const orch = new OrchestratorService(skl, fakeContext, budget);
+
+  const sessionAtMax: import("./types/index.js").OrchestratorSession = {
+    session_id: "session_001",
+    session_start: new Date().toISOString(),
+    proposals_reviewed: budget.max_proposals,
+    circuit_breaker_counts: {},
+    consecutive_uncertain: 0,
+    escalations: [],
+    rfcs_opened: [],
+    uncertain_decisions: [],
+    circuit_breakers_triggered: [],
+    recurring_patterns_flagged: [],
+  };
+
+  if (orch.isSessionBudgetExceeded(sessionAtMax)) {
+    console.log("PASS — isSessionBudgetExceeded() returns true at max_proposals");
+  } else {
+    console.error("FAIL — expected true when proposals_reviewed === max_proposals");
+    process.exit(1);
+  }
+
+  // ── Test 12: isSessionBudgetExceeded — elapsed time exceeded ────
+  console.log("\n=== Test 12: isSessionBudgetExceeded — time exceeded ===");
+  const sessionOldStart: import("./types/index.js").OrchestratorSession = {
+    session_id: "session_001",
+    session_start: new Date(Date.now() - 91 * 60_000).toISOString(),
+    proposals_reviewed: 0,
+    circuit_breaker_counts: {},
+    consecutive_uncertain: 0,
+    escalations: [],
+    rfcs_opened: [],
+    uncertain_decisions: [],
+    circuit_breakers_triggered: [],
+    recurring_patterns_flagged: [],
+  };
+
+  if (orch.isSessionBudgetExceeded(sessionOldStart)) {
+    console.log("PASS — isSessionBudgetExceeded() returns true when elapsed > max_duration_minutes");
+  } else {
+    console.error("FAIL — expected true when elapsed time exceeds max_duration_minutes");
+    process.exit(1);
+  }
+
   // Cleanup
   await fs.rm(skl.sklDir, { recursive: true, force: true });
   console.log("\nAll filesystem tests passed. Cleaned up .skl/");

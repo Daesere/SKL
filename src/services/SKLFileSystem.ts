@@ -555,6 +555,37 @@ export class SKLFileSystem {
     await atomicWrite(filePath, serialized);
   }
 
+  /**
+   * Return the most recent session log by `session_id` (alphabetic
+   * sort works because IDs are zero-padded).
+   *
+   * Returns `null` without throwing when the directory is empty or
+   * contains no valid session logs.
+   */
+  async readMostRecentSessionLog(): Promise<SessionLog | null> {
+    const logs = await this.readSessionLogs();
+    if (logs.length === 0) return null;
+    return logs[logs.length - 1]!;
+  }
+
+  /**
+   * Derive the next `session_NNN` ID by counting existing log files.
+   *
+   * 0 existing → `"session_001"`, 2 existing → `"session_003"`, etc.
+   */
+  async getNextSessionId(): Promise<string> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.logDir);
+    } catch (err) {
+      if (isFsError(err, "ENOENT")) entries = [];
+      else throw err;
+    }
+
+    const count = entries.filter((f) => f.endsWith(".json")).length;
+    return `session_${String(count + 1).padStart(3, "0")}`;
+  }
+
   // ── Agent Context (read / write) ─────────────────────────────────
 
   /** Resolved path to a specific agent context file. */
