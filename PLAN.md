@@ -93,8 +93,29 @@ writes State, and produces session handoff logs.
 **Goal:** RFC acceptance criteria status updates driven by CI results.
 ADR promotion. uncertainty_level reduction via passing tests.
 
+### Substages
+- 4.1 Python hook: Check 6 (acceptance criteria gate) and Check 7 (RFC scope pause)
+- 4.2 CI check service: test detection and uncertainty_level 0
+- 4.3 Human digest: digest generator and HookConfig extension
+- 4.4 Human digest: review command, DigestPanel, and uncertainty_level 1
+- 4.5 Change heatmap and final extension wiring
+
 ### Completion Criteria
-- TBD when Stage 4 prompts are written
+- Push on a branch linked to an RFC with uncompleted criteria is blocked
+  by Check 6 with the failing criteria named
+- Push in a scope with an expired RFC deadline is blocked by Check 7
+  with the RFC ID named
+- skl.runCICheck on a passing test reduces uncertainty_level to 0
+- CI file watcher detects pytest XML results and reduces level to 0 automatically
+- skl.reviewDigest opens Digest panel showing all level-2 State entries
+- Mark Reviewed reduces level-2 to level-1, resets change_count_since_review
+- Mark All Reviewed updates all level-2 entries in one atomic write
+- level-0 and level-3 entries are unaffected by Mark Reviewed
+- After 10 architectural decisions, a notification prompts digest review
+- Queue panel heatmap shows State records sorted by change_count descending
+- hook/test_hook_checks.py covers all six check cases and passes
+- npm run lint clean, TypeScript compiles under strict mode
+- Remote up to date with all four stages marked complete in PLAN.md
 
 ---
 
