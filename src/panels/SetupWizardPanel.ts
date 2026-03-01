@@ -147,7 +147,14 @@ export class SetupWizardPanel {
 
     try {
       switch (msg.command) {
-        case "step1_next": {
+        case "start_phase0": {
+          // Delegate to the dedicated Phase 0 init command; close wizard
+          this._panel.dispose();
+          await vscode.commands.executeCommand("skl.initPhase0");
+          break;
+        }
+
+        case "start_full_setup": {
           this._state.step = 2;
           this._render();
           break;

@@ -66,6 +66,11 @@ export function generateSetupWizardHtml(state: WizardState): string {
     .scope-card label { margin-bottom: 6px; }
     .hint { font-size: 0.8em; color: var(--vscode-descriptionForeground); margin-top: 8px; }
     .button-row { margin-top: 12px; }
+    .mode-selection { display: flex; gap: 24px; margin-top: 16px; }
+    .mode-card { flex: 1; border: 1px solid var(--vscode-panel-border, #444); border-radius: 6px; padding: 20px; }
+    .mode-card.recommended { border-color: var(--vscode-focusBorder, #0078d4); background: var(--vscode-editor-inactiveSelectionBackground, rgba(0,0,0,0.1)); }
+    .mode-card ul { padding-left: 16px; margin: 12px 0; }
+    .mode-card li { list-style: none; margin: 4px 0; font-size: 0.9em; }
   </style>
 </head>
 <body>
@@ -101,7 +106,37 @@ function renderStep1(): string {
   return `<h2>Welcome to SKL</h2>
 <p>SKL (Shared Knowledge Layer) coordinates multi-agent development by making architectural decisions, scope boundaries, and shared assumptions explicit and enforceable.</p>
 <p>SKL is not a code generator, not a CI system, and not a replacement for code review. It is a coordination layer that ensures agents cannot inadvertently break each other's assumptions.</p>
-<button onclick="vscode.postMessage({command:'step1_next'})">Get Started</button>`;
+<div class="mode-selection">
+  <div class="mode-card recommended">
+    <h3>Phase 0 — Start here</h3>
+    <p>See what your agents are doing in under 10 minutes.
+       No scope definitions required. Upgrade to full SKL when ready.</p>
+    <ul>
+      <li>✓ Hook installed automatically</li>
+      <li>✓ Activity feed shows agent changes</li>
+      <li>✓ Risk signals flagged on push</li>
+      <li>○ Scope enforcement (not active)</li>
+      <li>○ RFCs and governance (not active)</li>
+    </ul>
+    <button onclick="vscode.postMessage({command:'start_phase0'})">
+      Start with Phase 0 (recommended)
+    </button>
+  </div>
+  <div class="mode-card">
+    <h3>Full SKL</h3>
+    <p>Complete governance layer with scope enforcement, RFCs,
+       and the Orchestrator. Requires defining scopes and invariants.</p>
+    <ul>
+      <li>✓ Everything in Phase 0</li>
+      <li>✓ Scope enforcement on push</li>
+      <li>✓ RFC gate for architectural changes</li>
+      <li>✓ Orchestrator review session</li>
+    </ul>
+    <button onclick="vscode.postMessage({command:'start_full_setup'})">
+      Full Setup
+    </button>
+  </div>
+</div>`;
 }
 
 function renderStep2(state: WizardState): string {
