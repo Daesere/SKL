@@ -7,8 +7,7 @@
  * Consumed by DigestPanel.ts which sets enableScripts: true on the webview.
  */
 
-import type { DigestReport } from "../services/DigestService.js";
-import type { StateRecord } from "../types/index.js";
+import type { DigestReport, ScoredStateRecord } from "../services/DigestService.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -36,17 +35,30 @@ function uncertaintyLabel(level: number): string {
 
 // ── Section renderers ─────────────────────────────────────────────────────────
 
+function priorityBadgeClass(score: number): string {
+  if (score < 10) return "badge-low";
+  if (score < 30) return "badge-medium";
+  return "badge-high";
+}
+
 function renderEntryCard(
-  entry: StateRecord,
+  entry: ScoredStateRecord,
   borderColor: string,
   showMarkReviewedButton: boolean,
+  showCheckbox: boolean,
 ): string {
   const truncatedResp = truncate(escapeHtml(entry.responsibilities), 100);
   const markBtn = showMarkReviewedButton
     ? `<button data-record-id="${escapeHtml(entry.id)}" onclick="vscode.postMessage({command:'mark_reviewed',record_id:'${escapeHtml(entry.id)}'})">Mark Reviewed</button>`
     : "";
+  const checkbox = showCheckbox
+    ? `<input type="checkbox" class="entry-checkbox" data-record-id="${escapeHtml(entry.id)}" onchange="updateBulkBar()">`
+    : "";
+  const badgeClass = priorityBadgeClass(entry.priority_score);
   return `
-    <div class="entry-card" style="border-left: 4px solid ${borderColor}; padding: 10px 14px; margin: 8px 0; background: var(--vscode-editor-background, #1e1e1e); border-radius: 4px;">
+    <div class="entry-card" data-scope="${escapeHtml(entry.semantic_scope)}" data-level="${entry.uncertainty_level}" style="position:relative; border-left: 4px solid ${borderColor}; padding: 10px 14px; margin: 8px 0; background: var(--vscode-editor-background, #1e1e1e); border-radius: 4px;">
+      <span class="priority-badge ${badgeClass}">${entry.priority_score}</span>
+      ${checkbox}
       <div><strong>${escapeHtml(entry.id)}</strong> — <code>${escapeHtml(entry.path)}</code></div>
       <div style="margin-top:4px;">
         <span class="scope-badge">${escapeHtml(entry.semantic_scope)}</span>
@@ -61,7 +73,7 @@ function renderEntryCard(
 function renderSection1(report: DigestReport): string {
   const entries = report.state_entries_for_review;
   if (entries.length === 0) return "";
-  const cards = entries.map((e) => renderEntryCard(e, "var(--color-neutral)", true)).join("");
+  const cards = entries.map((e) => renderEntryCard(e, "var(--color-neutral)", true, true)).join("");
   return `
   <section>
     <h2>Entries Pending Review (${entries.length})</h2>
@@ -74,7 +86,7 @@ function renderSection2(report: DigestReport): string {
   // Exclude level-2 entries — they already appear in Section 1.
   const entries = report.state_entries_flagged.filter((r) => r.uncertainty_level !== 2);
   if (entries.length === 0) return "";
-  const cards = entries.map((e) => renderEntryCard(e, "var(--color-flagged)", true)).join("");
+  const cards = entries.map((e) => renderEntryCard(e, "var(--color-flagged)", true, true)).join("");
   return `
   <section>
     <h2>Flagged for Drift (${entries.length})</h2>
@@ -85,15 +97,19 @@ function renderSection2(report: DigestReport): string {
 function renderSection3(report: DigestReport): string {
   const entries = report.contested_entries;
   if (entries.length === 0) return "";
-  const cards = entries.map((e) => `
-    <div class="entry-card" style="border-left: 4px solid var(--color-contested); padding: 10px 14px; margin: 8px 0; background: var(--vscode-editor-background, #1e1e1e); border-radius: 4px;">
+  const cards = entries.map((e) => {
+    const badgeClass = priorityBadgeClass(e.priority_score);
+    return `
+    <div class="entry-card" data-scope="${escapeHtml(e.semantic_scope)}" data-level="${e.uncertainty_level}" style="position:relative; border-left: 4px solid var(--color-contested); padding: 10px 14px; margin: 8px 0; background: var(--vscode-editor-background, #1e1e1e); border-radius: 4px;">
+      <span class="priority-badge ${badgeClass}">${e.priority_score}</span>
       <div><strong>${escapeHtml(e.id)}</strong> — <code>${escapeHtml(e.path)}</code></div>
       <div style="margin-top:4px;">
         <span class="scope-badge">${escapeHtml(e.semantic_scope)}</span>
         <span class="uncertainty-badge u3">U3 Contested</span>
       </div>
-      <p class="contested-note">⚠ Requires explicit resolution. Use 'SKL: Resolve RFC' or manually reduce uncertainty_level.</p>
-    </div>`).join("");
+      <p class="contested-note">&#9888; Requires explicit resolution. Use 'SKL: Resolve RFC' or manually reduce uncertainty_level.</p>
+    </div>`;
+  }).join("");
   return `
   <section>
     <h2>Contested Entries (${entries.length})</h2>
@@ -139,6 +155,43 @@ function renderSection5(report: DigestReport): string {
  * @returns       Full HTML document string (UTF-8).
  */
 export function generateDigestHtml(report: DigestReport): string {
+  const allEntries = [
+    ...report.state_entries_for_review,
+    ...report.state_entries_flagged,
+    ...report.contested_entries,
+  ];
+  const distinctScopes = [...new Set(allEntries.map((e) => e.semantic_scope))];
+
+  const patternsSection = report.patterns_from_session_log.length > 0
+    ? `<section class="patterns-section">
+  <h2>Patterns from Last Session</h2>
+  <ul>${report.patterns_from_session_log.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>
+  <p class="patterns-note">These observations are informational &#8212; no action required.</p>
+</section>`
+    : "";
+
+  const filterBar = `<div class="filter-bar">
+  <label>Scope:
+    <select id="scope-filter" onchange="applyFilters()">
+      <option value="">All</option>
+      ${distinctScopes.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("")}
+    </select>
+  </label>
+  <label>Level:
+    <select id="level-filter" onchange="applyFilters()">
+      <option value="">All</option>
+      <option value="2">U2 Proposed</option>
+      <option value="3">U3 Contested</option>
+    </select>
+  </label>
+</div>`;
+
+  const bulkBar = `<div id="bulk-bar" style="display:none; align-items:center; gap:12px; padding:8px; background:#2d2d2d; border-radius:4px; margin-bottom:8px;">
+  <span id="bulk-count">0</span> selected
+  <button onclick="markSelectedReviewed()">Mark Selected Reviewed</button>
+  <button onclick="document.querySelectorAll('.entry-checkbox').forEach(c =&gt; { c.checked = false; }); updateBulkBar()">Clear Selection</button>
+</div>`;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -210,6 +263,15 @@ export function generateDigestHtml(report: DigestReport): string {
   .contested-note { color: var(--color-contested); font-style: italic; font-size: 0.9em; }
   ul { padding-left: 20px; }
   li { margin: 3px 0; }
+  .priority-badge { position: absolute; top: 8px; right: 8px; border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: bold; }
+  .badge-low { background: var(--color-reviewed); }
+  .badge-medium { background: var(--color-flagged); }
+  .badge-high { background: var(--color-contested); color: #fff; }
+  .patterns-section { background: #252525; border-radius: 4px; padding: 10px 14px; margin-bottom: 16px; }
+  .patterns-note { font-style: italic; font-size: 0.85em; color: var(--vscode-descriptionForeground, #888); margin-top: 6px; }
+  .filter-bar { display: flex; gap: 16px; margin-bottom: 8px; align-items: center; }
+  .filter-bar label { display: flex; align-items: center; gap: 6px; font-size: 0.9em; }
+  .filter-bar select { background: #2d2d2d; color: #ccc; border: 1px solid #555; border-radius: 3px; padding: 2px 6px; }
 </style>
 </head>
 <body>
@@ -217,6 +279,10 @@ export function generateDigestHtml(report: DigestReport): string {
 <h1>SKL Digest</h1>
 <p class="summary">${escapeHtml(report.summary)}</p>
 <p class="generated">Generated: ${escapeHtml(report.generated_at)}</p>
+
+${patternsSection}
+${filterBar}
+${bulkBar}
 
 ${renderSection1(report)}
 ${renderSection2(report)}
@@ -232,6 +298,26 @@ window.addEventListener('message', event => {
     if (btn) btn.textContent = '\\u2713 Reviewed';
   }
 });
+function applyFilters() {
+  const scope = document.getElementById('scope-filter').value;
+  const level = document.getElementById('level-filter').value;
+  document.querySelectorAll('.entry-card').forEach(function(card) {
+    const matchScope = !scope || card.dataset.scope === scope;
+    const matchLevel = !level || card.dataset.level === level;
+    card.style.display = matchScope && matchLevel ? '' : 'none';
+  });
+}
+function updateBulkBar() {
+  const selected = Array.from(document.querySelectorAll('.entry-checkbox:checked'))
+    .map(function(c) { return c.dataset.recordId; });
+  document.getElementById('bulk-bar').style.display = selected.length > 0 ? 'flex' : 'none';
+  document.getElementById('bulk-count').textContent = String(selected.length);
+}
+function markSelectedReviewed() {
+  const selected = Array.from(document.querySelectorAll('.entry-checkbox:checked'))
+    .map(function(c) { return c.dataset.recordId; });
+  vscode.postMessage({ command: 'mark_selected_reviewed', record_ids: selected });
+}
 </script>
 </body>
 </html>`;

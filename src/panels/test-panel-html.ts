@@ -250,7 +250,7 @@ const mockDigestReport: DigestReport = {
     },
   ],
   open_rfc_ids: ["RFC_003", "RFC_007"],
-  patterns_from_session_log: ["Repeated auth model changes", "Cross-scope writes to data layer"],
+  patterns_from_session_log: ["Repeated auth model changes", "Cross-scope writes to data layer", "Agent-2 consistently misclassifies cross-scope utility imports"],
   summary: "Digest " + new Date().toLocaleDateString() + ". 2 entries pending review, 1 flagged for drift, 1 contested, 2 open RFCs, 2 architectural decisions since last digest.",
 };
 
@@ -258,6 +258,9 @@ const digestHtml = generateDigestHtml(mockDigestReport);
 writeFileSync(join(outDir, "test-digest.html"), digestHtml, "utf8");
 console.log(`Wrote: ${join(outDir, "test-digest.html")}`);
 console.log(`  file://${join(outDir, "test-digest.html")}`);
+// Also write as v2 for the Prompt 55 verify step
+writeFileSync(join(outDir, "test-digest-v2.html"), digestHtml, "utf8");
+console.log(`Wrote: ${join(outDir, "test-digest-v2.html")} (alias for prompt 55 verify)`);
 
 // ── 5. Queue panel with heatmap ────────────────────────────────
 
