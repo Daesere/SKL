@@ -6,8 +6,8 @@ Runs as a Git pre-push hook. Validates file scope, semantic scope,
 and queue budget before allowing a push. Designed to run with
 Python 3.8+ standard library only — no third-party dependencies.
 
-Execution order: startup → Check 1 → Check 2 → Check 5 → Check 6 →
-  [Check 7 — next prompt] → Check 3 → Check 4 → write.
+Execution order: startup → Check 1 → Check 2 → Check 5 → Check 6 → Check 7 →
+  Check 3 → Check 4 → write.
 """
 from __future__ import annotations
 
@@ -303,6 +303,101 @@ def check_acceptance_criteria(
         print(
             "Run 'SKL: Run CI Check' in VS Code to update criterion status "
             "after your tests pass."
+        )
+        return False
+
+    return True
+
+
+# ── Check 7: RFC Scope Pause ──────────────────────────────────
+
+def check_rfc_scope_pause(
+    knowledge: Dict[str, Any],
+    agent_context: Dict[str, Any],
+    rfcs_dir: str,
+) -> bool:
+    """
+    Check 7 — block push when any open RFC whose human response deadline
+    has passed shares its triggering proposal's semantic scope with the
+    current agent.
+
+    An expired deadline means the scope is paused until that RFC is
+    resolved. Uses UTC comparison for Python 3.8 compatibility.
+    """
+    if not os.path.isdir(rfcs_dir):
+        return True
+
+    rfc_files = [
+        os.path.join(rfcs_dir, f)
+        for f in os.listdir(rfcs_dir)
+        if f.endswith(".json")
+    ]
+    if not rfc_files:
+        return True
+
+    # Build a lookup of proposal_id → proposal from the queue.
+    queue: List[Dict[str, Any]] = knowledge.get("queue", [])
+    queue_by_id: Dict[str, Dict[str, Any]] = {
+        p["proposal_id"]: p
+        for p in queue
+        if isinstance(p, dict) and "proposal_id" in p
+    }
+
+    agent_scope: str = agent_context.get("semantic_scope", "")
+    now_utc = datetime.now(timezone.utc)
+
+    for rfc_path in rfc_files:
+        try:
+            with open(rfc_path, "r", encoding="utf-8") as fh:
+                rfc = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(
+                f"SKL: Warning — could not parse RFC file {rfc_path}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        # Only enforce on open RFCs.
+        if rfc.get("status") != "open":
+            continue
+
+        # Parse and compare deadline.
+        raw_deadline = rfc.get("human_response_deadline")
+        if not raw_deadline:
+            continue
+        try:
+            deadline_dt = datetime.fromisoformat(
+                raw_deadline.replace("Z", "+00:00")
+            )
+        except (ValueError, AttributeError):
+            continue
+
+        # If deadline has NOT passed, skip.
+        if deadline_dt > now_utc:
+            continue
+
+        # Deadline has passed — resolve the triggering proposal's scope.
+        triggering_id = rfc.get("triggering_proposal")
+        if not triggering_id:
+            continue
+        proposal = queue_by_id.get(triggering_id)
+        if proposal is None:
+            continue
+
+        proposal_scope: str = proposal.get("semantic_scope", "")
+
+        # Only block when the agent's scope matches the RFC's scope.
+        if proposal_scope != agent_scope:
+            continue
+
+        rfc_id = rfc.get("id", os.path.basename(rfc_path))
+        print(
+            f"SKL: Push blocked. RFC {rfc_id} response deadline passed "
+            f"{raw_deadline}. Semantic scope '{agent_scope}' is paused until "
+            f"this RFC is resolved."
+        )
+        print(
+            "Resolve the RFC in VS Code using 'SKL: Resolve RFC' to continue."
         )
         return False
 
@@ -970,6 +1065,12 @@ def main() -> None:
             knowledge, agent_context, _current_branch, rfcs_dir
         ):
             sys.exit(1)
+
+    # ── Check 7: RFC Scope Pause ─────────────────────────────────
+    rfcs_dir = os.path.join(skl_dir, "rfcs")
+    if not check_rfc_scope_pause(knowledge, agent_context, rfcs_dir):
+        sys.exit(1)
+
     # ── Collect State records & security patterns ───────────────
     state_records: List[Dict[str, Any]] = knowledge.get("state", [])
     invariants = knowledge.get("invariants", {})

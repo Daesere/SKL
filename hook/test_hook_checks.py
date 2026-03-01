@@ -31,6 +31,7 @@ check_file_scope = pre_push.check_file_scope
 check_semantic_scope = pre_push.check_semantic_scope
 check_queue_budget = pre_push.check_queue_budget
 check_acceptance_criteria = pre_push.check_acceptance_criteria
+check_rfc_scope_pause = pre_push.check_rfc_scope_pause
 
 passed = 0
 failed = 0
@@ -328,8 +329,169 @@ with tempfile.TemporaryDirectory() as tmpdir:
     )
     assert_true(result is True, "resolved RFC → skipped, Check 6 passes")
 
-# ════════════════════════════════════════════════════════════════════
-# Summary
+# ════════════════════════════════════════════════════════════════════# Test 11: Check 7 — expired RFC, same semantic scope → blocks
+# ══════════════════════════════════════════════════════════════════
+print("\n=== Test 11: Check 7 — expired RFC, same scope → blocks ===")
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    past = "2020-01-01T00:00:00Z"  # well in the past
+    rfc_expired = {
+        "id": "RFC_011",
+        "status": "open",
+        "triggering_proposal": "prop_20260301_agent1_011",
+        "human_response_deadline": past,
+    }
+    with open(os.path.join(tmpdir, "RFC_011.json"), "w") as f:
+        json.dump(rfc_expired, f)
+
+    knowledge_11 = {
+        "queue": [
+            {
+                "proposal_id": "prop_20260301_agent1_011",
+                "semantic_scope": "backend",
+            }
+        ],
+    }
+    agent_ctx_11 = {"semantic_scope": "backend"}
+
+    captured = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = captured
+    result = check_rfc_scope_pause(knowledge_11, agent_ctx_11, tmpdir)
+    sys.stdout = old_stdout
+    output = captured.getvalue()
+
+    assert_true(result is False, "expired RFC same scope → Check 7 blocks")
+    assert_true("RFC_011" in output, "block message names the RFC ID")
+    assert_true("backend" in output, "block message names the scope")
+
+# ══════════════════════════════════════════════════════════════════
+# Test 12: Check 7 — expired RFC, different semantic scope → passes
+# ══════════════════════════════════════════════════════════════════
+print("\n=== Test 12: Check 7 — expired RFC, different scope → passes ===")
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    rfc_other_scope = {
+        "id": "RFC_012",
+        "status": "open",
+        "triggering_proposal": "prop_20260301_agent1_012",
+        "human_response_deadline": "2020-01-01T00:00:00Z",
+    }
+    with open(os.path.join(tmpdir, "RFC_012.json"), "w") as f:
+        json.dump(rfc_other_scope, f)
+
+    knowledge_12 = {
+        "queue": [
+            {
+                "proposal_id": "prop_20260301_agent1_012",
+                "semantic_scope": "infra",  # different from agent's scope
+            }
+        ],
+    }
+    agent_ctx_12 = {"semantic_scope": "backend"}
+
+    result = check_rfc_scope_pause(knowledge_12, agent_ctx_12, tmpdir)
+    assert_true(
+        result is True,
+        "expired RFC different scope → Check 7 passes",
+    )
+
+# ══════════════════════════════════════════════════════════════════
+# Test 13: Check 7 — future deadline, same scope → passes
+# ══════════════════════════════════════════════════════════════════
+print("\n=== Test 13: Check 7 — future deadline, same scope → passes ===")
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    # Deadline far in the future
+    rfc_future = {
+        "id": "RFC_013",
+        "status": "open",
+        "triggering_proposal": "prop_20260301_agent1_013",
+        "human_response_deadline": "2099-12-31T23:59:59Z",
+    }
+    with open(os.path.join(tmpdir, "RFC_013.json"), "w") as f:
+        json.dump(rfc_future, f)
+
+    knowledge_13 = {
+        "queue": [
+            {
+                "proposal_id": "prop_20260301_agent1_013",
+                "semantic_scope": "backend",
+            }
+        ],
+    }
+    agent_ctx_13 = {"semantic_scope": "backend"}
+
+    result = check_rfc_scope_pause(knowledge_13, agent_ctx_13, tmpdir)
+    assert_true(
+        result is True,
+        "future deadline same scope → RFC not expired, Check 7 passes",
+    )
+
+# ══════════════════════════════════════════════════════════════════
+# Test 14: Check 7 — resolved RFC with past deadline → skipped
+# ══════════════════════════════════════════════════════════════════
+print("\n=== Test 14: Check 7 — resolved RFC with past deadline → skipped ===")
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    rfc_resolved_7 = {
+        "id": "RFC_014",
+        "status": "resolved",  # not open → skipped
+        "triggering_proposal": "prop_20260301_agent1_014",
+        "human_response_deadline": "2020-01-01T00:00:00Z",
+    }
+    with open(os.path.join(tmpdir, "RFC_014.json"), "w") as f:
+        json.dump(rfc_resolved_7, f)
+
+    knowledge_14 = {
+        "queue": [
+            {
+                "proposal_id": "prop_20260301_agent1_014",
+                "semantic_scope": "backend",
+            }
+        ],
+    }
+    agent_ctx_14 = {"semantic_scope": "backend"}
+
+    result = check_rfc_scope_pause(knowledge_14, agent_ctx_14, tmpdir)
+    assert_true(result is True, "resolved RFC with past deadline → skipped, Check 7 passes")
+
+# ══════════════════════════════════════════════════════════════════
+# Test 15: Check 7 — no RFC files → passes immediately
+# ══════════════════════════════════════════════════════════════════
+print("\n=== Test 15: Check 7 — no RFC files → passes immediately ===")
+
+with tempfile.TemporaryDirectory() as empty_dir:
+    agent_ctx_15 = {"semantic_scope": "backend"}
+    result = check_rfc_scope_pause({}, agent_ctx_15, empty_dir)
+    assert_true(result is True, "empty rfcs dir → Check 7 passes immediately")
+
+# ══════════════════════════════════════════════════════════════════
+# Test 16: Check 7 — triggering proposal not found in Queue → RFC skipped
+# ══════════════════════════════════════════════════════════════════
+print("\n=== Test 16: Check 7 — triggering proposal not in Queue → skipped ===")
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    rfc_missing_proposal = {
+        "id": "RFC_016",
+        "status": "open",
+        "triggering_proposal": "prop_does_not_exist",
+        "human_response_deadline": "2020-01-01T00:00:00Z",
+    }
+    with open(os.path.join(tmpdir, "RFC_016.json"), "w") as f:
+        json.dump(rfc_missing_proposal, f)
+
+    # Queue does not contain the triggering proposal
+    knowledge_16: dict = {"queue": []}
+    agent_ctx_16 = {"semantic_scope": "backend"}
+
+    result = check_rfc_scope_pause(knowledge_16, agent_ctx_16, tmpdir)
+    assert_true(
+        result is True,
+        "triggering proposal not found in Queue → RFC skipped, Check 7 passes",
+    )
+
+# ══════════════════════════════════════════════════════════════════# Summary
 # ════════════════════════════════════════════════════════════════════
 print()
 print("════════════════════════════════════")
