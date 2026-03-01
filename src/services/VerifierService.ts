@@ -118,7 +118,7 @@ export class VerifierService {
       "\n## File Context",
       `- Path: ${proposal.path}`,
       `- Responsibilities: ${proposal.responsibilities}`,
-      `- Dependencies: ${proposal.dependencies.join(", ") || "none"}`,
+      `- Dependencies: ${(proposal.dependencies ?? []).join(", ") || "none"}`,
       "\n## Agent Rationale",
       proposal.rationale,
       "\n## Agent Reasoning Summary",

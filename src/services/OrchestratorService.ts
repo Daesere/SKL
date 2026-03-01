@@ -337,7 +337,7 @@ export class OrchestratorService {
     if (needsVerifierPass(currentProposal, stage1Result)) {
       const diff = await this.verifierService.getFileDiff(
         currentProposal.path,
-        currentProposal.branch,
+        currentProposal.branch ?? "",
         hookConfig.base_branch,
       );
       verifierResult = await this.verifierService.runVerifierPass(
@@ -349,7 +349,7 @@ export class OrchestratorService {
         ...currentProposal,
         classification_verification: {
           ...currentProposal.classification_verification,
-          agent_classification: currentProposal.change_type,
+          agent_classification: currentProposal.change_type ?? "behavioral",
           verifier_classification: verifierResult.verifier_classification,
           agreement: verifierResult.agreement,
         },
@@ -826,7 +826,7 @@ export class OrchestratorService {
           result.decision === "auto_approve"
         ) {
           const repoRoot = this.sklFileSystem.repoRoot;
-          const mergeResult = await this.mergeBranch(proposal.branch, repoRoot);
+          const mergeResult = await this.mergeBranch(proposal.branch ?? "", repoRoot);
           if (mergeResult.conflict) {
             onProgress(
               `⚠️ Merge conflict on ${proposal.branch}. Resolve manually and resume.`,

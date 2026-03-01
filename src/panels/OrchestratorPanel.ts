@@ -180,7 +180,7 @@ export class OrchestratorPanel {
           (p): ProposalReviewResult => ({
             proposal_id: p.proposal_id,
             decision: statusToDecision(p.status),
-            rationale: p.rationale,
+            rationale: p.rationale ?? "",
             rfc_id: null,
             state_updated: p.status === "approved",
             branch_merged: false,

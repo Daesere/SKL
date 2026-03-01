@@ -129,23 +129,23 @@ export async function detectAssumptionConflict(
   outputChannel: OutputChannelLike,
 ): Promise<AssumptionConflictResult> {
   // Pre-filter: nothing to check if this proposal has no assumptions
-  if (currentProposal.assumptions.length === 0) {
+  if ((currentProposal.assumptions?.length ?? 0) === 0) {
     return NO_ASSUMPTION_CONFLICT;
   }
 
-  const currentHasShared = currentProposal.assumptions.some((a) => a.shared);
-  const currentDepsSet = new Set(currentProposal.dependencies);
+  const currentHasShared = currentProposal.assumptions!.some((a) => a.shared);
+  const currentDepsSet = new Set(currentProposal.dependencies ?? []);
 
   // Build candidate list — deterministic, no LLM
   const candidates = otherPendingProposals.filter((other) => {
-    if (other.assumptions.length === 0) return false;
+    if ((other.assumptions?.length ?? 0) === 0) return false;
 
-    const otherHasShared = other.assumptions.some((a) => a.shared);
+    const otherHasShared = other.assumptions!.some((a) => a.shared);
     if (currentHasShared || otherHasShared) return true;
 
     if (other.semantic_scope === currentProposal.semantic_scope) return true;
 
-    const sharedDep = other.dependencies.some((dep) => currentDepsSet.has(dep));
+    const sharedDep = (other.dependencies ?? []).some((dep) => currentDepsSet.has(dep));
     if (sharedDep) return true;
 
     return false;
@@ -196,8 +196,8 @@ export async function detectAssumptionConflict(
     const firstLine = responseText.trim().split("\n")[0].trim().toUpperCase();
     if (firstLine.startsWith("YES")) {
       const explanation = responseText.trim().split("\n").slice(1).join(" ").trim();
-      const assumptionA: Assumption = currentProposal.assumptions[0];
-      const assumptionB: Assumption = candidate.assumptions[0];
+      const assumptionA: Assumption = currentProposal.assumptions![0];
+      const assumptionB: Assumption = candidate.assumptions![0];
       return {
         has_conflict: true,
         proposal_a_id: currentProposal.proposal_id,

@@ -59,38 +59,13 @@ export const QueueProposalSchema = z.object({
   /** Must match a key in scope_definitions.json. */
   semantic_scope: z.string(),
 
-  /** Scope definition version used at submission. */
-  scope_schema_version: z.string(),
-
-  /** Agent-submitted change type (advisory; may be overridden by Stage 1). */
-  change_type: ChangeTypeSchema,
-
-  /** Plain-language description of the file's responsibility after this change. */
-  responsibilities: z.string(),
-
-  /** Direct dependencies after this change. */
-  dependencies: z.array(z.string()),
-
-  /** Invariant keys touched by this change. */
-  invariants_touched: z.array(z.string()),
-
-  /** Assumptions declared by the agent for this change. */
-  assumptions: z.array(AssumptionSchema),
-
-  /** Signed integer indicating expected uncertainty shift. */
-  uncertainty_delta: UncertaintyDeltaSchema,
-
-  /** Agent's rationale for the change. */
-  rationale: z.string(),
+  // ── Fields written by the enforcement hook (always present) ────────────
 
   /** Whether the file was outside the agent's assigned file scope. */
   out_of_scope: z.boolean(),
 
   /** Whether the change crosses a semantic scope boundary. */
   cross_scope_flag: z.boolean(),
-
-  /** Git branch name for this proposal. */
-  branch: z.string(),
 
   /** AST-derived risk signals (populated by enforcement hook Check 3). */
   risk_signals: RiskSignalsSchema,
@@ -101,14 +76,49 @@ export const QueueProposalSchema = z.object({
   /** Import scan results (populated by enforcement hook Check 4). */
   dependency_scan: DependencyScanSchema,
 
-  /** Agent's reasoning summary (optional promotion from scratchpad). */
-  agent_reasoning_summary: z.string(),
+  /**
+   * Reasons this proposal is blocking (populated by the hook).
+   * e.g. ["cross_scope_undeclared_dependency"]
+   */
+  blocking_reasons: z.array(z.string()).optional(),
 
   /** Current status of the proposal. */
   status: ProposalStatusSchema,
 
   /** ISO 8601 datetime when the proposal was submitted. */
   submitted_at: z.string().datetime(),
+
+  // ── Fields supplied by the agent (present in full SKL; absent in Phase 0) ─
+
+  /** Scope definition version used at submission. */
+  scope_schema_version: z.string().optional(),
+
+  /** Agent-submitted change type (advisory; may be overridden by Stage 1). */
+  change_type: ChangeTypeSchema.optional(),
+
+  /** Plain-language description of the file's responsibility after this change. */
+  responsibilities: z.string().optional(),
+
+  /** Direct dependencies after this change. */
+  dependencies: z.array(z.string()).optional(),
+
+  /** Invariant keys touched by this change. */
+  invariants_touched: z.array(z.string()).optional(),
+
+  /** Assumptions declared by the agent for this change. */
+  assumptions: z.array(AssumptionSchema).optional(),
+
+  /** Signed integer indicating expected uncertainty shift. */
+  uncertainty_delta: UncertaintyDeltaSchema.optional(),
+
+  /** Agent's rationale for the change. */
+  rationale: z.string().optional(),
+
+  /** Git branch name for this proposal. */
+  branch: z.string().optional(),
+
+  /** Agent's reasoning summary (optional promotion from scratchpad). */
+  agent_reasoning_summary: z.string().optional(),
 
   /**
    * Orchestrator-recorded decision rationale (Section 7.4).

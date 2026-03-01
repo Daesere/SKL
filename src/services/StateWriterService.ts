@@ -81,10 +81,10 @@ export function createStateEntry(
     path: proposal.path,
     semantic_scope: proposal.semantic_scope,
     scope_schema_version: scopeDefinitions.scope_definitions.version,
-    responsibilities: proposal.responsibilities,
-    dependencies: proposal.dependencies,
-    invariants_touched: proposal.invariants_touched,
-    assumptions: proposal.assumptions,
+    responsibilities: proposal.responsibilities ?? "",
+    dependencies: proposal.dependencies ?? [],
+    invariants_touched: proposal.invariants_touched ?? [],
+    assumptions: proposal.assumptions ?? [],
     owner: proposal.agent_id,
     version: 1,
     // § 3.2.3 — ALL new entries start at Proposed (2). No exceptions.
@@ -154,10 +154,10 @@ export function updateStateEntry(
     // Fields updated from proposal
     semantic_scope: proposal.semantic_scope,
     scope_schema_version: scopeDefinitions.scope_definitions.version,
-    responsibilities: proposal.responsibilities,
-    dependencies: proposal.dependencies,
-    invariants_touched: proposal.invariants_touched,
-    assumptions: proposal.assumptions,
+    responsibilities: proposal.responsibilities ?? "",
+    dependencies: proposal.dependencies ?? [],
+    invariants_touched: proposal.invariants_touched ?? [],
+    assumptions: proposal.assumptions ?? [],
     owner: proposal.agent_id,
 
     // Counters

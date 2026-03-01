@@ -59,8 +59,8 @@ export function detectRFCTrigger(
 
   // Rule 2: Invariant touched AND responsibilities mention a modification keyword.
   // Heuristic: keyword match will produce false positives. Tunable.
-  if (proposal.invariants_touched.length > 0) {
-    const responsibilitiesLower = proposal.responsibilities.toLowerCase();
+  if ((proposal.invariants_touched ?? []).length > 0) {
+    const responsibilitiesLower = (proposal.responsibilities ?? "").toLowerCase();
     const hasModificationKeyword = MODIFICATION_KEYWORDS.some((kw) =>
       responsibilitiesLower.includes(kw),
     );
@@ -70,11 +70,11 @@ export function detectRFCTrigger(
   }
 
   // Rule 3: New external dependency — not in State records and not in tech_stack.
-  if (proposal.dependencies.length > 0) {
+  if ((proposal.dependencies ?? []).length > 0) {
     const knownPaths = new Set(knowledge.state.map((r) => r.path));
     const techStackEntries = knowledge.invariants.tech_stack;
 
-    for (const dep of proposal.dependencies) {
+    for (const dep of (proposal.dependencies ?? [])) {
       const inState = knownPaths.has(dep);
       const inTechStack = techStackEntries.some((entry) =>
         entry.toLowerCase().includes(dep.toLowerCase()) ||
@@ -215,7 +215,7 @@ function buildRfcPrompt(
   knowledge: KnowledgeFile,
 ): string {
   const relevantRecords = knowledge.state.filter(
-    (r) => r.path === proposal.path || proposal.dependencies.includes(r.path),
+    (r) => r.path === proposal.path || (proposal.dependencies ?? []).includes(r.path),
   );
 
   const sections: string[] = [
@@ -227,8 +227,8 @@ function buildRfcPrompt(
     `- Responsibilities: ${proposal.responsibilities}`,
     `- Rationale: ${proposal.rationale}`,
     `- Assumptions: ${
-      proposal.assumptions.length > 0
-        ? proposal.assumptions.map((a) => `${a.id}: "${a.text}"`).join("; ")
+      (proposal.assumptions ?? []).length > 0
+        ? (proposal.assumptions ?? []).map((a) => `${a.id}: "${a.text}"`).join("; ")
         : "none"
     }`,
     "\n## Relevant State Records",

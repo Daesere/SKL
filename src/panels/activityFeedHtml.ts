@@ -120,9 +120,9 @@ function entryHtml(proposal: ProposalWithBlocking): string {
   const classes = entryClasses(proposal);
   const badge = badgeHtml(proposal);
   const ts = proposal.submitted_at ? relativeTime(proposal.submitted_at) : "";
-  const ctLabel = changeTypeLabel(proposal.change_type);
+  const ctLabel = changeTypeLabel(proposal.change_type ?? "behavioral");
   const rsHtml = riskSignalsHtml(proposal.risk_signals);
-  const reasonHtml = reasoningHtml(proposal.agent_reasoning_summary);
+  const reasonHtml = reasoningHtml(proposal.agent_reasoning_summary ?? "");
   const pill = statusPill(proposal.status);
   return `<div class="${classes}">
   <div class="activity-header">

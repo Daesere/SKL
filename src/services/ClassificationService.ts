@@ -61,9 +61,10 @@ export function applyStage1Overrides(proposal: QueueProposal): ClassificationRes
     }
   }
 
-  // Rule 4: Default — trust agent classification
+  // Rule 4: Default — trust agent classification.
+  // Phase 0 hook-generated proposals omit change_type; default to "behavioral".
   return {
-    resolved_change_type: change_type,
+    resolved_change_type: change_type ?? "behavioral",
     stage1_override: false,
     override_reason: null,
   };
@@ -108,7 +109,7 @@ export function isEligibleForAutoApproval(
   if (proposal.cross_scope_flag) return false;
 
   // Assumptions: empty array is fine; otherwise every assumption must be non-shared
-  if (proposal.assumptions.length > 0 && proposal.assumptions.some((a) => a.shared)) {
+  if ((proposal.assumptions?.length ?? 0) > 0 && proposal.assumptions!.some((a) => a.shared)) {
     return false;
   }
 
