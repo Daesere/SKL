@@ -18,6 +18,7 @@ import type {
   AssumptionConflictResult,
   Rfc,
 } from "../../types/index.js";
+import { RfcSchema, DraftAcceptanceCriterionSchema } from "../../types/index.js";
 
 // ---------------------------------------------------------------------------
 // Minimal fixture builders
@@ -179,7 +180,110 @@ function assertEqual<T>(actual: T, expected: T, msg?: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Schema backward-compatibility tests (synchronous)
+// ---------------------------------------------------------------------------
+
+console.log("\nRFCService — Schema tests");
+console.log("=========================");
+
+test("Test S1 — RfcSchema: parse with no draft fields present (backward compat)", () => {
+  const now = new Date().toISOString();
+  const rfc = {
+    id: "RFC_001",
+    status: "open",
+    created_at: now,
+    triggering_proposal: "p-001",
+    decision_required: "Should we proceed?",
+    context: "Context.",
+    option_a: { description: "Approve", consequences: "Proceeds." },
+    option_b: { description: "Reject", consequences: "Blocked." },
+  };
+  const result = RfcSchema.parse(rfc);
+  if (result.draft_acceptance_criteria !== undefined) {
+    throw new Error("Expected draft_acceptance_criteria to be undefined");
+  }
+  if (result.option_rankings !== undefined) {
+    throw new Error("Expected option_rankings to be undefined");
+  }
+  if (result.recommended_human_rationale !== undefined) {
+    throw new Error("Expected recommended_human_rationale to be undefined");
+  }
+});
+
+test("Test S2 — RfcSchema: parse with all three draft fields populated", () => {
+  const now = new Date().toISOString();
+  const rfc = {
+    id: "RFC_001",
+    status: "open",
+    created_at: now,
+    triggering_proposal: "p-001",
+    decision_required: "Should we proceed?",
+    context: "Context.",
+    option_a: { description: "Approve", consequences: "Proceeds." },
+    option_b: { description: "Reject", consequences: "Blocked." },
+    draft_acceptance_criteria: [{
+      id: "ac_draft_001",
+      description: "Tests must pass",
+      check_type: "test",
+      check_reference: "npm test",
+      rationale: "Ensures no regressions.",
+      status: "pending",
+    }],
+    option_rankings: [{
+      option: "option_a",
+      effort_score: 3,
+      risk_score: 2,
+      invariant_alignment_score: 8,
+      composite_score: -3,
+      recommended: true,
+      ranking_rationale: "Best alignment with invariants.",
+    }],
+    recommended_human_rationale: "I recommend option_a. You may accept, edit, or replace this rationale entirely.",
+  };
+  const result = RfcSchema.parse(rfc);
+  if (!result.draft_acceptance_criteria || result.draft_acceptance_criteria.length !== 1) {
+    throw new Error("Expected draft_acceptance_criteria with 1 element");
+  }
+  if (!result.option_rankings || result.option_rankings.length !== 1) {
+    throw new Error("Expected option_rankings with 1 element");
+  }
+  if (result.recommended_human_rationale === undefined) {
+    throw new Error("Expected recommended_human_rationale to be set");
+  }
+});
+
+test("Test S3 — DraftAcceptanceCriterionSchema: status pending is valid", () => {
+  const criterion = {
+    id: "ac_draft_001",
+    description: "Tests must pass",
+    check_type: "test",
+    check_reference: "npm test",
+    rationale: "Regression prevention.",
+    status: "pending",
+  };
+  DraftAcceptanceCriterionSchema.parse(criterion); // should not throw
+});
+
+test("Test S4 — DraftAcceptanceCriterionSchema: status resolved throws", () => {
+  const criterion = {
+    id: "ac_draft_001",
+    description: "Tests must pass",
+    check_type: "test",
+    check_reference: "npm test",
+    rationale: "Regression prevention.",
+    status: "resolved",
+  };
+  let threw = false;
+  try {
+    DraftAcceptanceCriterionSchema.parse(criterion);
+  } catch {
+    threw = true;
+  }
+  if (!threw) throw new Error("Expected parse to throw for status: 'resolved'");
+});
+
+// ---------------------------------------------------------------------------
+// detectRFCTrigger tests
 // ---------------------------------------------------------------------------
 
 console.log("\nRFCService.detectRFCTrigger");
@@ -380,7 +484,8 @@ await testAsync(
       makeKnowledge(),
       fs as unknown as Parameters<typeof generateRFC>[4],
     );
-    if (callCount !== 2) throw new Error(`Expected 2 LLM calls, got ${callCount}`);
+    // callCount may be > 2 due to draft enrichment calls; we only check retry happened
+    if (callCount < 2) throw new Error(`Expected at least 2 LLM calls, got ${callCount}`);
     if (!secondPrompt.includes("failed validation with these errors")) {
       throw new Error("Retry prompt should contain validation error message");
     }
@@ -421,11 +526,15 @@ await testAsync(
   "Test 14 — generateRFC: shared_assumption_conflict includes both assumption texts in prompt",
   async () => {
     const { fs } = makeMockFs(0);
-    let capturedPrompt = "";
+    let capturedFirstPrompt = "";
+    let firstCallDone = false;
     setSelectChatModels(async () => [{
       sendRequest: async (messages: unknown[]) => {
-        const msg = messages[0] as { content: string };
-        capturedPrompt = msg.content;
+        if (!firstCallDone) {
+          const msg = messages[0] as { content: string };
+          capturedFirstPrompt = msg.content;
+          firstCallDone = true;
+        }
         return {
           text: (async function* () { yield VALID_LLM_JSON; })(),
         };
@@ -441,15 +550,131 @@ await testAsync(
     );
     const textA = conflict.assumption_a!.text;
     const textB = conflict.assumption_b!.text;
-    if (!capturedPrompt.includes(textA)) {
+    if (!capturedFirstPrompt.includes(textA)) {
       throw new Error(`Prompt missing assumption A text: "${textA}"`);
     }
-    if (!capturedPrompt.includes(textB)) {
+    if (!capturedFirstPrompt.includes(textB)) {
       throw new Error(`Prompt missing assumption B text: "${textB}"`);
     }
-    if (!capturedPrompt.includes("Promote assumption to Invariant")) {
+    if (!capturedFirstPrompt.includes("Promote assumption to Invariant")) {
       throw new Error("Prompt missing forced option_a instruction");
     }
+    resetLmMock();
+  },
+);
+
+// Test 15a: generateRFC where both draft LLM calls throw → RFC still written, no draft fields
+await testAsync(
+  "Test 15a — generateRFC: both draft LLM calls throw → RFC written, no draft fields",
+  async () => {
+    const { fs, written } = makeMockFs(0);
+    let callCount = 0;
+    setSelectChatModels(async () => [{
+      sendRequest: async () => {
+        callCount++;
+        if (callCount === 1) {
+          // Initial RFC generation call succeeds
+          return { text: (async function* () { yield VALID_LLM_JSON; })() };
+        }
+        throw new Error("Draft generation failed");
+      },
+    }]);
+    const rfc = await generateRFC(
+      makeProposal({ change_type: "architectural" }),
+      "architectural_change_type",
+      null,
+      makeKnowledge(),
+      fs as unknown as Parameters<typeof generateRFC>[4],
+    );
+    if (written.length < 1) throw new Error("Expected RFC to be written");
+    if (rfc.option_rankings !== undefined) throw new Error("Expected no option_rankings");
+    if (rfc.recommended_human_rationale !== undefined) throw new Error("Expected no recommended_human_rationale");
+    if (rfc.draft_acceptance_criteria !== undefined) throw new Error("Expected no draft_acceptance_criteria");
+    resetLmMock();
+  },
+);
+
+const VALID_RANKINGS_JSON = JSON.stringify([
+  {
+    option: "option_a",
+    effort_score: 3,
+    risk_score: 4,
+    invariant_alignment_score: 8,
+    composite_score: -1,
+    recommended: false,
+    ranking_rationale: "Moderate effort and risk.",
+  },
+  {
+    option: "option_b",
+    effort_score: 2,
+    risk_score: 3,
+    invariant_alignment_score: 9,
+    composite_score: -4,
+    recommended: true,
+    ranking_rationale: "Best overall score.",
+  },
+]);
+
+const VALID_RATIONALE_CRITERIA_JSON = JSON.stringify({
+  rationale: "I recommend option_b because it balances effort and risk. You may accept, edit, or replace this rationale entirely.",
+  criteria: [
+    {
+      id: "ac_draft_001",
+      description: "All unit tests must pass.",
+      check_type: "test",
+      check_reference: "npm test",
+      rationale: "Regression prevention.",
+      status: "pending",
+    },
+    {
+      id: "ac_draft_002",
+      description: "Lint must pass.",
+      check_type: "lint",
+      check_reference: "npm run lint",
+      rationale: "Code quality enforcement.",
+      status: "pending",
+    },
+  ],
+});
+
+// Test 15b: generateRFC where drafts succeed → all fields present, recommendation updated
+await testAsync(
+  "Test 15b — generateRFC: drafts succeed → option_rankings, rationale, criteria, recommendation updated",
+  async () => {
+    const { fs, written } = makeMockFs(0);
+    let callCount = 0;
+    setSelectChatModels(async () => [{
+      sendRequest: async () => {
+        callCount++;
+        if (callCount === 1) {
+          return { text: (async function* () { yield VALID_LLM_JSON; })() };
+        } else if (callCount === 2) {
+          return { text: (async function* () { yield VALID_RANKINGS_JSON; })() };
+        }
+        return { text: (async function* () { yield VALID_RATIONALE_CRITERIA_JSON; })() };
+      },
+    }]);
+    const rfc = await generateRFC(
+      makeProposal({ change_type: "architectural" }),
+      "architectural_change_type",
+      null,
+      makeKnowledge(),
+      fs as unknown as Parameters<typeof generateRFC>[4],
+    );
+    if (!rfc.option_rankings || rfc.option_rankings.length < 1) {
+      throw new Error("Expected option_rankings to be set");
+    }
+    if (!rfc.recommended_human_rationale) {
+      throw new Error("Expected recommended_human_rationale to be set");
+    }
+    if (!rfc.draft_acceptance_criteria || rfc.draft_acceptance_criteria.length < 1) {
+      throw new Error("Expected draft_acceptance_criteria to be set");
+    }
+    if (rfc.orchestrator_recommendation !== "option_b") {
+      throw new Error(`Expected orchestrator_recommendation to be option_b, got ${rfc.orchestrator_recommendation}`);
+    }
+    // writeRFC called twice: initial + enrichment
+    if (written.length < 2) throw new Error(`Expected at least 2 writeRFC calls, got ${written.length}`);
     resetLmMock();
   },
 );

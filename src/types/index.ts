@@ -67,11 +67,15 @@ export {
   RfcSchema,
   RfcOptionSchema,
   RfcStatusSchema,
+  DraftAcceptanceCriterionSchema,
+  OptionRankingSchema,
 } from "./RFC.js";
 export type {
   Rfc,
   RfcOption,
   RfcStatus,
+  DraftAcceptanceCriterion,
+  OptionRanking,
 } from "./RFC.js";
 
 // ADR (Section 9.5)

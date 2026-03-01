@@ -23,6 +23,34 @@ export const RfcStatusSchema = z.union([
 export type RfcStatus = z.infer<typeof RfcStatusSchema>;
 
 /**
+ * Draft acceptance criterion — Orchestrator-generated, human-editable.
+ * status is always "pending" when created; validated as a literal.
+ */
+export const DraftAcceptanceCriterionSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+  check_type: z.string(),
+  check_reference: z.string(),
+  rationale: z.string(),
+  status: z.literal("pending"),
+});
+export type DraftAcceptanceCriterion = z.infer<typeof DraftAcceptanceCriterionSchema>;
+
+/**
+ * Per-option effort/risk/alignment ranking produced by the Orchestrator.
+ */
+export const OptionRankingSchema = z.object({
+  option: z.enum(["option_a", "option_b", "option_c"]),
+  effort_score: z.number().min(0).max(10),
+  risk_score: z.number().min(0).max(10),
+  invariant_alignment_score: z.number().min(0).max(10),
+  composite_score: z.number(),
+  recommended: z.boolean(),
+  ranking_rationale: z.string(),
+});
+export type OptionRanking = z.infer<typeof OptionRankingSchema>;
+
+/**
  * RFC Schema (Section 9.2)
  *
  * Architectural decisions require human pre-clearance before the implementing
@@ -80,6 +108,15 @@ export const RfcSchema = z.object({
 
   /** ADR ID if the resolution was promoted to an Architecture Decision Record. */
   promoted_to_adr: z.string().optional(),
+
+  /** Orchestrator-drafted acceptance criteria (optional, read-only to human). */
+  draft_acceptance_criteria: z.array(DraftAcceptanceCriterionSchema).optional(),
+
+  /** Per-option effort/risk/alignment scores from the Orchestrator (optional). */
+  option_rankings: z.array(OptionRankingSchema).optional(),
+
+  /** First-person rationale draft for the human operator (optional). */
+  recommended_human_rationale: z.string().optional(),
 });
 
 export type Rfc = z.infer<typeof RfcSchema>;

@@ -16,13 +16,15 @@
 
 import { z } from "zod";
 import * as vscode from "vscode";
-import { RfcOptionSchema } from "../types/index.js";
+import { RfcOptionSchema, OptionRankingSchema, DraftAcceptanceCriterionSchema } from "../types/index.js";
 import type {
   QueueProposal,
   KnowledgeFile,
   AssumptionConflictResult,
   RFCTriggerReason,
   Rfc,
+  OptionRanking,
+  DraftAcceptanceCriterion,
 } from "../types/index.js";
 import type { SKLFileSystem } from "./SKLFileSystem.js";
 
@@ -271,6 +273,112 @@ function buildRfcPrompt(
   return sections.join("\n");
 }
 
+// ── RFC Draft Enrichment ──────────────────────────────────────────────────
+
+/**
+ * Make two post-generation LLM calls to enrich an RFC with option rankings,
+ * a recommended human rationale, and draft acceptance criteria.
+ *
+ * Each call is wrapped independently — failure in either returns only the
+ * fields successfully generated so far.
+ */
+async function generateRFCDrafts(
+  rfc: Rfc,
+  model: LmModel,
+  knowledge: KnowledgeFile,
+): Promise<Partial<Pick<Rfc, "option_rankings" | "recommended_human_rationale" | "draft_acceptance_criteria">>> {
+  const result: Partial<Pick<Rfc, "option_rankings" | "recommended_human_rationale" | "draft_acceptance_criteria">> = {};
+
+  const invariantSummary = [
+    `tech_stack: ${knowledge.invariants.tech_stack.join(", ")}`,
+    `auth_model: ${knowledge.invariants.auth_model}`,
+    `data_storage: ${knowledge.invariants.data_storage}`,
+    `security_patterns: ${knowledge.invariants.security_patterns.join(", ")}`,
+  ].join("; ");
+
+  // ── Call 1: Option rankings ───────────────────────────────────────────
+  try {
+    const optionSection = [
+      `option_a: ${rfc.option_a.description} (consequences: ${rfc.option_a.consequences})`,
+      `option_b: ${rfc.option_b.description} (consequences: ${rfc.option_b.consequences})`,
+      rfc.option_c ? `option_c: ${rfc.option_c.description} (consequences: ${rfc.option_c.consequences})` : null,
+    ].filter(Boolean).join("\n");
+
+    const rankingPrompt = [
+      "You are an SKL Orchestrator. Score each option for the following RFC.",
+      `RFC: ${rfc.decision_required}`,
+      `Options:\n${optionSection}`,
+      `Project invariants: ${invariantSummary}`,
+      "",
+      "For each option score:",
+      "  effort_score (0–10, lower = easier to implement)",
+      "  risk_score (0–10, lower = safer)",
+      "  invariant_alignment_score (0–10, higher = better alignment with invariants)",
+      "  composite_score = effort_score + risk_score - invariant_alignment_score",
+      "  recommended: true on the option with the LOWEST composite_score, false on all others",
+      "  ranking_rationale: one sentence",
+      "",
+      "Assign IDs: ranking_001, ranking_002, etc.",
+      "Respond ONLY with a JSON array of ranking objects. No markdown fences.",
+    ].join("\n");
+
+    const rankingRaw = await invokeModel(model, rankingPrompt);
+    const rankingParsed: unknown = JSON.parse(stripMarkdownFences(rankingRaw));
+    const rankings = z.array(OptionRankingSchema).parse(rankingParsed);
+    result.option_rankings = rankings as OptionRanking[];
+  } catch {
+    // eat error — option_rankings will be absent
+  }
+
+  // ── Call 2: Rationale and draft criteria ──────────────────────────────
+  try {
+    const recommendedKey = result.option_rankings?.find((r) => r.recommended)?.option ?? rfc.orchestrator_recommendation;
+    const rationalePrompt = [
+      "You are an SKL Orchestrator assisting a human with RFC resolution.",
+      `RFC: ${rfc.decision_required}`,
+      `Recommended option: ${recommendedKey ?? "option_a"}`,
+      "",
+      "1. Write a ONE-PARAGRAPH rationale in FIRST PERSON for why this option was recommended.",
+      '   End with exactly this sentence: "You may accept, edit, or replace this rationale entirely."',
+      "",
+      "2. Generate 2–3 specific, mechanically checkable acceptance criteria.",
+      "   Each must have:",
+      "     description: string",
+      '     check_type: one of "test", "performance_test", "manual", "lint", "ci"',
+      "     check_reference: a file path or CLI command",
+      "     rationale: one sentence",
+      "     status: \"pending\"",
+      "   Assign IDs: ac_draft_001, ac_draft_002, etc.",
+      "",
+      "Respond ONLY with a JSON object: { rationale: string, criteria: [...] }. No markdown fences.",
+    ].join("\n");
+
+    const rationaleRaw = await invokeModel(model, rationalePrompt);
+    const rationaleParsed = JSON.parse(stripMarkdownFences(rationaleRaw)) as { rationale?: string; criteria?: unknown[] };
+
+    if (typeof rationaleParsed.rationale === "string") {
+      result.recommended_human_rationale = rationaleParsed.rationale;
+    }
+
+    if (Array.isArray(rationaleParsed.criteria)) {
+      const criteria: DraftAcceptanceCriterion[] = [];
+      for (const item of rationaleParsed.criteria) {
+        const parsed = DraftAcceptanceCriterionSchema.safeParse(item);
+        if (parsed.success) {
+          criteria.push(parsed.data);
+        }
+      }
+      if (criteria.length > 0) {
+        result.draft_acceptance_criteria = criteria;
+      }
+    }
+  } catch {
+    // eat error — rationale and/or draft criteria may be absent
+  }
+
+  return result;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────
 
 /**
@@ -325,9 +433,32 @@ export async function generateRFC(
     human_response_deadline: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
   };
 
-  // Step 5: Write and return
+  // Step 5: Write initial RFC
   await sklFileSystem.writeRFC(rfc);
-  return rfc;
+
+  // Step 6: Enrich with draft fields (option rankings, rationale, criteria)
+  let enrichedRfc = rfc;
+  try {
+    const drafts = await generateRFCDrafts(rfc, model, knowledge);
+    if (Object.keys(drafts).length > 0) {
+      enrichedRfc = { ...rfc, ...drafts };
+      // Update orchestrator_recommendation to the recommended option from rankings
+      if (drafts.option_rankings) {
+        const recommended = drafts.option_rankings.find((r) => r.recommended);
+        if (recommended) {
+          enrichedRfc = { ...enrichedRfc, orchestrator_recommendation: recommended.option };
+        }
+      }
+      await sklFileSystem.writeRFC(enrichedRfc);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Log to output channel if available — this path should be unreachable
+    // because generateRFCDrafts itself catches all errors, but guard defensively.
+    void msg; // suppress unused-variable lint
+  }
+
+  return enrichedRfc;
 }
 
 // ── RFC deadline monitoring (Section 9.4) ──────────────────────────────────
