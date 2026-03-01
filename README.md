@@ -93,6 +93,40 @@ fail-stop coordination layer with bounded damage and explicit uncertainty.
 
 The full SKL v1.4 reference specification is in `SPEC.md`.
 
+## Windows
+
+### Pre-push hook
+
+Git for Windows cannot reliably execute `#!/bin/sh` shell-script hooks when
+invoked from a PowerShell or CMD terminal. SKL solves this with a dual-file
+strategy in `.githooks/`:
+
+| File | Used by |
+|---|---|
+| `pre-push` | Mac, Linux, Git Bash on Windows — Python script with `#!/usr/bin/env python3` |
+| `pre-push.cmd` | Windows PowerShell / CMD — native batch wrapper that calls `python pre-push.py` |
+
+Git for Windows prefers `pre-push.cmd` when running from a non-POSIX terminal
+because the `.cmd` file is directly executable by `cmd.exe`. On Mac/Linux, only
+`pre-push` (no extension) is ever considered by Git.
+
+**Repos where you install SKL via the extension:** `HookInstaller` detects
+`process.platform === 'win32'` and writes a `pre-push.cmd` wrapper alongside
+the `pre-push` Python script. It also reads `core.hooksPath` from local git
+config so it installs to the correct directory regardless of whether the repo
+uses the default `.git/hooks/` path or a custom one.
+
+If a push fails with `cannot spawn … pre-push: No such file or directory`
+on Windows, confirm that `pre-push.cmd` exists in the hooks directory and that
+`core.hooksPath` is set correctly:
+
+```powershell
+git config core.hooksPath   # should print .githooks or similar
+dir .githooks\pre-push.cmd  # should exist
+```
+
+Reinstall with **SKL: Install Hook** from the command palette if needed.
+
 ## Development
 
 Built using spec-driven development with a single Copilot agent.

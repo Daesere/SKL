@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+# SKL_HOOK_V1.4 — cross-platform entry point (Unix/Mac/Windows Git Bash)
+# Windows PowerShell users: Git for Windows uses pre-push.cmd instead.
+import os
+import subprocess
+import sys
+
+script = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "pre-push.py")
+result = subprocess.run([sys.executable, script] + sys.argv[1:], stdin=sys.stdin)
+sys.exit(result.returncode)

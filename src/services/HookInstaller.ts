@@ -71,7 +71,8 @@ export class HookInstaller {
    * in the repository.
    */
   async isInstalled(repoRoot: string): Promise<boolean> {
-    const hookPath = path.join(repoRoot, ".git", "hooks", "pre-push");
+    const hooksDir = await this.getHooksDir(repoRoot);
+    const hookPath = path.join(hooksDir, "pre-push");
     try {
       const content = await fs.readFile(hookPath, "utf-8");
       return content.slice(0, 50).includes(HOOK_MARKER);
@@ -123,7 +124,7 @@ export class HookInstaller {
       pythonExecutable = detected;
     }
 
-    const hooksDir = path.join(repoRoot, ".git", "hooks");
+    const hooksDir = await this.getHooksDir(repoRoot);
     const targetPath = path.join(hooksDir, "pre-push");
 
     // Ensure the hooks directory exists and is writable.
@@ -186,7 +187,7 @@ export class HookInstaller {
    * Silently returns when the hook is not present.
    */
   async uninstall(repoRoot: string): Promise<void> {
-    const hooksDir = path.join(repoRoot, ".git", "hooks");
+    const hooksDir = await this.getHooksDir(repoRoot);
     const hookPath = path.join(hooksDir, "pre-push");
     const backupPath = hookPath + ".skl-backup";
     const cmdPath = hookPath + ".cmd";
@@ -205,6 +206,35 @@ export class HookInstaller {
   }
 
   // ── Private helpers ─────────────────────────────────────────────
+
+  /**
+   * Resolve the directory Git will actually read hooks from.
+   *
+   * Reads `core.hooksPath` from git config. If it is set to a relative
+   * path it is resolved against `repoRoot`. Falls back to the
+   * traditional `.git/hooks` location when unset or when the git
+   * command fails (e.g. git is not on PATH).
+   */
+  private async getHooksDir(repoRoot: string): Promise<string> {
+    try {
+      const { stdout } = await this._execFile("git", [
+        "-C",
+        repoRoot,
+        "config",
+        "--local",
+        "core.hooksPath",
+      ]);
+      const configured = stdout.trim();
+      if (configured) {
+        return path.isAbsolute(configured)
+          ? configured
+          : path.join(repoRoot, configured);
+      }
+    } catch {
+      // git not available or config key absent — use default.
+    }
+    return path.join(repoRoot, ".git", "hooks");
+  }
 
   /**
    * Try each Python candidate in order and return the first one that
