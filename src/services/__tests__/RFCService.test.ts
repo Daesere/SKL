@@ -1,15 +1,21 @@
 /**
- * Tests for RFCService.detectRFCTrigger
+ * Tests for RFCService — detectRFCTrigger (Tests 1-10) and generateRFC (Tests 11-14)
  *
- * Run: npx tsx src/services/__tests__/RFCService.test.ts
- * (No vscode mock needed — pure function, no I/O, no LLM calls)
+ * Run: npx tsx --require ./src/testing/register-vscode-mock.cjs src/services/__tests__/RFCService.test.ts
+ * (vscode mock required for generateRFC tests)
  */
 
-import { detectRFCTrigger } from "../RFCService.js";
+import { detectRFCTrigger, generateRFC } from "../RFCService.js";
+import {
+  setSelectChatModels,
+  resetLmMock,
+  createMockModel,
+} from "../../testing/configure-lm-mock.js";
 import type {
   QueueProposal,
   KnowledgeFile,
   AssumptionConflictResult,
+  Rfc,
 } from "../../types/index.js";
 
 // ---------------------------------------------------------------------------
@@ -153,6 +159,18 @@ function test(name: string, fn: () => void): void {
   }
 }
 
+async function testAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+    console.log(`  PASS  ${name}`);
+    passed++;
+  } catch (err) {
+    console.error(`  FAIL  ${name}`);
+    console.error(`         ${(err as Error).message}`);
+    failed++;
+  }
+}
+
 function assertEqual<T>(actual: T, expected: T, msg?: string): void {
   if (actual !== expected) {
     throw new Error(msg ?? `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
@@ -269,6 +287,173 @@ test("Test 10 — all conditions false returns null", () => {
 });
 
 // ---------------------------------------------------------------------------
+// generateRFC tests (Tests 11–14) — require vscode LM mock
+// ---------------------------------------------------------------------------
+
+console.log("\nRFCService.generateRFC");
+console.log("======================");
+
+/** Minimal shape that satisfies the two SKLFileSystem methods used by generateRFC. */
+interface MockSKLFileSystem {
+  listRFCs(): Promise<string[]>;
+  writeRFC(rfc: Rfc): Promise<void>;
+}
+
+function makeMockFs(existingCount = 0): { fs: MockSKLFileSystem; written: Rfc[] } {
+  const written: Rfc[] = [];
+  return {
+    fs: {
+      listRFCs: async () =>
+        Array.from({ length: existingCount }, (_, i) =>
+          `RFC_${String(i + 1).padStart(3, "0")}`,
+        ),
+      writeRFC: async (rfc: Rfc) => {
+        written.push(rfc);
+      },
+    },
+    written,
+  };
+}
+
+const VALID_LLM_JSON = JSON.stringify({
+  decision_required: "Can this architectural change proceed?",
+  context: "The proposal changes auth module signatures used by 4 consumers.",
+  option_a: { description: "Approve with RFC", consequences: "Change proceeds under RFC oversight." },
+  option_b: { description: "Reject until tests added", consequences: "Blocked until acceptance criteria pass." },
+  option_c: { description: "Defer to next sprint", consequences: "Delayed; no immediate impact." },
+  orchestrator_recommendation: "option_b",
+  orchestrator_rationale: "Public API change needs acceptance criteria before merge.",
+});
+
+// Test 11: valid LLM response → RFC written with correct ID, status, flags
+void (async () => {
+await testAsync(
+  "Test 11 — generateRFC: valid LLM response produces correct RFC",
+  async () => {
+    const { fs, written } = makeMockFs(2); // 2 existing → new ID is RFC_003
+    setSelectChatModels(async () => [createMockModel(VALID_LLM_JSON)]);
+    const rfc = await generateRFC(
+      makeProposal({ change_type: "architectural" }),
+      "architectural_change_type",
+      null,
+      makeKnowledge(),
+      fs as unknown as Parameters<typeof generateRFC>[4],
+    );
+    assertEqual(rfc.id, "RFC_003");
+    assertEqual(rfc.status, "open");
+    assertEqual(rfc.merge_blocked_until_criteria_pass, true);
+    assertEqual(rfc.triggering_proposal, "p-001");
+    if (written.length !== 1) throw new Error(`Expected writeRFC called once, got ${written.length}`);
+    resetLmMock();
+  },
+);
+
+// Test 12: first LLM response fails Zod → retry made with error text appended
+await testAsync(
+  "Test 12 — generateRFC: Zod failure on first attempt triggers retry",
+  async () => {
+    const { fs } = makeMockFs(0);
+    let callCount = 0;
+    let secondPrompt = "";
+    setSelectChatModels(async () => [{
+      sendRequest: async (messages: unknown[]) => {
+        callCount++;
+        if (callCount === 2) {
+          // Capture the retry prompt (content field from LanguageModelChatMessage.User)
+          const msg = messages[0] as { content: string };
+          secondPrompt = msg.content;
+        }
+        return {
+          text: (async function* () {
+            yield callCount === 1
+              ? JSON.stringify({ decision_required: "only this field" }) // missing required fields
+              : VALID_LLM_JSON;
+          })(),
+        };
+      },
+    }]);
+    await generateRFC(
+      makeProposal(),
+      "architectural_change_type",
+      null,
+      makeKnowledge(),
+      fs as unknown as Parameters<typeof generateRFC>[4],
+    );
+    if (callCount !== 2) throw new Error(`Expected 2 LLM calls, got ${callCount}`);
+    if (!secondPrompt.includes("failed validation with these errors")) {
+      throw new Error("Retry prompt should contain validation error message");
+    }
+    resetLmMock();
+  },
+);
+
+// Test 13: both LLM attempts fail validation → throws with descriptive message
+await testAsync(
+  "Test 13 — generateRFC: both attempts fail → throws RFC generation error",
+  async () => {
+    const { fs } = makeMockFs(0);
+    setSelectChatModels(async () => [createMockModel("{ \"bad\": true }")]);
+    let threw = false;
+    let errorMessage = "";
+    try {
+      await generateRFC(
+        makeProposal(),
+        "architectural_change_type",
+        null,
+        makeKnowledge(),
+        fs as unknown as Parameters<typeof generateRFC>[4],
+      );
+    } catch (err) {
+      threw = true;
+      errorMessage = (err as Error).message;
+    }
+    if (!threw) throw new Error("Expected generateRFC to throw when both attempts fail");
+    if (!errorMessage.includes("RFC generation failed after retry")) {
+      throw new Error(`Error message missing expected prefix; got: ${errorMessage}`);
+    }
+    resetLmMock();
+  },
+);
+
+// Test 14: shared_assumption_conflict trigger → prompt contains both assumption texts
+await testAsync(
+  "Test 14 — generateRFC: shared_assumption_conflict includes both assumption texts in prompt",
+  async () => {
+    const { fs } = makeMockFs(0);
+    let capturedPrompt = "";
+    setSelectChatModels(async () => [{
+      sendRequest: async (messages: unknown[]) => {
+        const msg = messages[0] as { content: string };
+        capturedPrompt = msg.content;
+        return {
+          text: (async function* () { yield VALID_LLM_JSON; })(),
+        };
+      },
+    }]);
+    const conflict = makeConflict();
+    await generateRFC(
+      makeProposal(),
+      "shared_assumption_conflict",
+      conflict,
+      makeKnowledge(),
+      fs as unknown as Parameters<typeof generateRFC>[4],
+    );
+    const textA = conflict.assumption_a!.text;
+    const textB = conflict.assumption_b!.text;
+    if (!capturedPrompt.includes(textA)) {
+      throw new Error(`Prompt missing assumption A text: "${textA}"`);
+    }
+    if (!capturedPrompt.includes(textB)) {
+      throw new Error(`Prompt missing assumption B text: "${textB}"`);
+    }
+    if (!capturedPrompt.includes("Promote assumption to Invariant")) {
+      throw new Error("Prompt missing forced option_a instruction");
+    }
+    resetLmMock();
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
@@ -277,3 +462,4 @@ console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   process.exit(1);
 }
+})();
