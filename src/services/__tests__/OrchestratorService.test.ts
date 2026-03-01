@@ -684,6 +684,324 @@ await testAsync(
 );
 
 // ---------------------------------------------------------------------------
+// runSession tests (Tests 16–20)
+// ---------------------------------------------------------------------------
+
+console.log("\nOrchestratorService — runSession");
+console.log("====================================");
+
+interface RunSessionMocks {
+  fs: SKLFileSystem;
+  sessionLogs: unknown[];
+  knowledgeWrites: KnowledgeFile[];
+}
+
+function makeRunSessionFs(opts: {
+  proposals: QueueProposal[];
+  writeKnowledgeFn?: (data: KnowledgeFile) => Promise<void>;
+}): RunSessionMocks {
+  const sessionLogs: unknown[] = [];
+  const knowledgeWrites: KnowledgeFile[] = [];
+  const knowledge = makeKnowledge([], opts.proposals);
+
+  const fs = {
+    repoRoot: "/repo",
+    readKnowledge: async () => ({
+      ...knowledge,
+      queue: [...knowledge.queue],
+      state: [...knowledge.state],
+    }),
+    readScopeDefinitions: async () => SCOPE_DEFS,
+    readHookConfig: async () => HOOK_CFG,
+    listADRs: async () => [] as string[],
+    writeKnowledge:
+      opts.writeKnowledgeFn ??
+      (async (data: KnowledgeFile) => {
+        knowledgeWrites.push(data);
+      }),
+    writeSessionLog: async (log: unknown) => {
+      sessionLogs.push(log);
+    },
+    getNextSessionId: async () => "session_rs_001",
+    readMostRecentSessionLog: async () => null,
+  } as unknown as SKLFileSystem;
+
+  return { fs, sessionLogs, knowledgeWrites };
+}
+
+// Test 16 — budget cap: 3 proposals, max_proposals: 2 → 2 reviewed, 3rd skipped
+await testAsync(
+  "Test 16 — runSession: budget cap stops loop after max_proposals reviews",
+  async () => {
+    resetLmMock();
+    const p1 = makeProposal({
+      proposal_id: "p-b1",
+      path: "src/a.py",
+      branch: "feat/b1",
+      submitted_at: "2024-01-01T00:00:00.000Z",
+      change_type: "mechanical",
+      risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
+    });
+    const p2 = makeProposal({
+      proposal_id: "p-b2",
+      path: "src/b.py",
+      branch: "feat/b2",
+      submitted_at: "2024-01-01T00:01:00.000Z",
+      change_type: "mechanical",
+      risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
+    });
+    const p3 = makeProposal({
+      proposal_id: "p-b3",
+      path: "src/c.py",
+      branch: "feat/b3",
+      submitted_at: "2024-01-01T00:02:00.000Z",
+      change_type: "mechanical",
+      risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
+    });
+
+    const budget = { ...DEFAULT_SESSION_BUDGET, max_proposals: 2 };
+    const mocks = makeRunSessionFs({ proposals: [p1, p2, p3] });
+    const progressMessages: string[] = [];
+    const execFn = makeExecFileFn(async () => ({ stdout: "", stderr: "" }));
+    const service = new OrchestratorService(
+      mocks.fs,
+      MOCK_CTX,
+      budget,
+      makeAgreementVerifier(),
+      undefined,
+      execFn,
+    );
+
+    await service.runSession((msg) => {
+      progressMessages.push(msg);
+    });
+
+    // Two knowledge writes (one per reviewed proposal)
+    assertEqual(mocks.knowledgeWrites.length, 2, "knowledgeWrites.length");
+    // endSession writes exactly one session log
+    assertEqual(mocks.sessionLogs.length, 1, "sessionLogs.length");
+    // Budget-exceeded message surfaced to caller
+    const hasExceeded = progressMessages.some((m) => m.includes("budget exceeded"));
+    if (!hasExceeded) {
+      throw new Error(
+        `Expected budget-exceeded message. Got: ${JSON.stringify(progressMessages)}`,
+      );
+    }
+  },
+);
+
+// Test 17 — uncertainty threshold: two consecutive uncertain rationales → break
+await testAsync(
+  "Test 17 — runSession: consecutive uncertainty at threshold → break with handoff note",
+  async () => {
+    resetLmMock();
+    const p1 = makeProposal({
+      proposal_id: "p-u1",
+      path: "src/utils/alpha.py",
+      branch: "feat/u1",
+      submitted_at: "2024-01-01T00:00:00.000Z",
+    });
+    const p2 = makeProposal({
+      proposal_id: "p-u2",
+      path: "src/utils/beta.py",
+      branch: "feat/u2",
+      submitted_at: "2024-01-01T00:01:00.000Z",
+    });
+
+    setSelectChatModels(async () => [
+      createMockModel("This approach is unclear about the best forward path."),
+    ]);
+
+    const budget = {
+      ...DEFAULT_SESSION_BUDGET,
+      max_proposals: 10,
+      self_uncertainty_threshold: 2,
+    };
+    const mocks = makeRunSessionFs({ proposals: [p1, p2] });
+    const progressMessages: string[] = [];
+    const execFn = makeExecFileFn(async () => ({ stdout: "", stderr: "" }));
+    const service = new OrchestratorService(
+      mocks.fs,
+      MOCK_CTX,
+      budget,
+      makeAgreementVerifier(),
+      undefined,
+      execFn,
+    );
+
+    await service.runSession((msg) => {
+      progressMessages.push(msg);
+    });
+    resetLmMock();
+
+    // Uncertainty threshold message surfaced
+    const hasUncertain = progressMessages.some((m) =>
+      m.includes("Self-uncertainty threshold"),
+    );
+    if (!hasUncertain) {
+      throw new Error(
+        `Expected uncertainty threshold message. Got: ${JSON.stringify(progressMessages)}`,
+      );
+    }
+    // Normal endSession (one session log)
+    assertEqual(mocks.sessionLogs.length, 1, "sessionLogs.length");
+  },
+);
+
+// Test 18 — merge conflict: session continues, conflict surfaced via onProgress
+await testAsync(
+  "Test 18 — runSession: merge conflict reported via onProgress, session not aborted",
+  async () => {
+    resetLmMock();
+    const p1 = makeProposal({
+      proposal_id: "p-mc1",
+      path: "src/merge/thing.py",
+      branch: "feat/mc1",
+      submitted_at: "2024-01-01T00:00:00.000Z",
+      change_type: "mechanical",
+      risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
+    });
+
+    const execFn = makeExecFileFn(async (_file: string, args: string[]) => {
+      if (args.includes("--no-ff")) {
+        throw Object.assign(new Error("merge conflict"), {
+          stderr: "CONFLICT (content): Merge conflict in src/merge/thing.py",
+        });
+      }
+      return { stdout: "", stderr: "" }; // --abort succeeds
+    });
+
+    const mocks = makeRunSessionFs({ proposals: [p1] });
+    const progressMessages: string[] = [];
+    const service = new OrchestratorService(
+      mocks.fs,
+      MOCK_CTX,
+      DEFAULT_SESSION_BUDGET,
+      makeAgreementVerifier(),
+      undefined,
+      execFn,
+    );
+
+    await service.runSession((msg) => {
+      progressMessages.push(msg);
+    });
+
+    // Conflict message reported to caller
+    const hasConflict = progressMessages.some(
+      (m) => m.includes("⚠️") || m.includes("Merge conflict"),
+    );
+    if (!hasConflict) {
+      throw new Error(
+        `Expected merge-conflict message. Got: ${JSON.stringify(progressMessages)}`,
+      );
+    }
+    // Session ends normally after conflict — endSession called once
+    assertEqual(mocks.sessionLogs.length, 1, "sessionLogs.length");
+  },
+);
+
+// Test 19 — write failure: emergency log written, original error rethrown
+await testAsync(
+  "Test 19 — runSession: writeKnowledge failure → FATAL progress, emergency log, error propagated",
+  async () => {
+    resetLmMock();
+    const p1 = makeProposal({
+      proposal_id: "p-wf1",
+      path: "src/wf/main.py",
+      branch: "feat/wf1",
+      submitted_at: "2024-01-01T00:00:00.000Z",
+      change_type: "mechanical",
+      risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
+    });
+
+    const diskError = new Error("ENOSPC: no space left on device");
+    const mocks = makeRunSessionFs({
+      proposals: [p1],
+      writeKnowledgeFn: async () => {
+        throw diskError;
+      },
+    });
+    const progressMessages: string[] = [];
+    const execFn = makeExecFileFn(async () => ({ stdout: "", stderr: "" }));
+    const service = new OrchestratorService(
+      mocks.fs,
+      MOCK_CTX,
+      DEFAULT_SESSION_BUDGET,
+      makeAgreementVerifier(),
+      undefined,
+      execFn,
+    );
+
+    let caughtError: Error | null = null;
+    try {
+      await service.runSession((msg) => {
+        progressMessages.push(msg);
+      });
+    } catch (err) {
+      caughtError = err as Error;
+    }
+
+    if (caughtError === null) {
+      throw new Error("Expected runSession to throw on write failure");
+    }
+    if (caughtError !== diskError) {
+      throw new Error(
+        `Expected original disk error rethrown. Got: ${caughtError.message}`,
+      );
+    }
+    // FATAL progress message emitted before throw
+    const hasFatal = progressMessages.some((m) => m.includes("FATAL:"));
+    if (!hasFatal) {
+      throw new Error(`Expected FATAL message. Got: ${JSON.stringify(progressMessages)}`);
+    }
+    // Emergency log via writeEmergencyHandoffLog → endSession called exactly once
+    assertEqual(mocks.sessionLogs.length, 1, "sessionLogs.length");
+  },
+);
+
+// Test 20 — happy path: all proposals processed, endSession called once
+await testAsync(
+  "Test 20 — runSession: happy path — all proposals processed, endSession once",
+  async () => {
+    resetLmMock();
+    const p1 = makeProposal({
+      proposal_id: "p-hp1",
+      path: "src/hp/alpha.py",
+      branch: "feat/hp1",
+      submitted_at: "2024-01-01T00:00:00.000Z",
+      change_type: "mechanical",
+      risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
+    });
+    const p2 = makeProposal({
+      proposal_id: "p-hp2",
+      path: "src/hp/beta.py",
+      branch: "feat/hp2",
+      submitted_at: "2024-01-01T00:01:00.000Z",
+      change_type: "mechanical",
+      risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
+    });
+
+    const mocks = makeRunSessionFs({ proposals: [p1, p2] });
+    const execFn = makeExecFileFn(async () => ({ stdout: "", stderr: "" }));
+    const service = new OrchestratorService(
+      mocks.fs,
+      MOCK_CTX,
+      DEFAULT_SESSION_BUDGET,
+      makeAgreementVerifier(),
+      undefined,
+      execFn,
+    );
+
+    await service.runSession(() => { /* no-op */ });
+
+    // Both proposals written atomically
+    assertEqual(mocks.knowledgeWrites.length, 2, "knowledgeWrites.length");
+    // endSession called exactly once
+    assertEqual(mocks.sessionLogs.length, 1, "sessionLogs.length");
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

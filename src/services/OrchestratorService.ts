@@ -641,15 +641,178 @@ export class OrchestratorService {
   // ── Stubs — implemented in later substages ─────────────────────────────────────────────
 
   // TODO: implemented in substage 3.8
-  async runSession(_session: OrchestratorSession): Promise<void> {
-    throw new Error("Not implemented — substage 3.8");
-  }
-
-  // TODO: implemented in substage 3.8
   async runTaskAssignment(
     _session: OrchestratorSession,
   ): Promise<string> {
     throw new Error("Not implemented — substage 3.8");
+  }
+
+  // ── Session runner (Section 7.1) ──────────────────────────────────────────
+
+  /**
+   * Drive a full orchestrator session: load state, iterate over all pending
+   * proposals in submission order, write knowledge atomically after each one,
+   * and produce a handoff log at the end.
+   *
+   * @param onProgress — called with status strings suitable for panel display.
+   */
+  async runSession(onProgress: (status: string) => void): Promise<void> {
+    const session0 = await this.initialize();
+
+    // Load all data up front
+    const knowledge0 = await this.sklFileSystem.readKnowledge();
+    const [scopeDefinitions, hookConfig] = await Promise.all([
+      this.sklFileSystem.readScopeDefinitions(),
+      this.sklFileSystem.readHookConfig(),
+    ]);
+    const adrIds = await this.sklFileSystem.listADRs();
+    // adrContext serialised for task assignment in substage 3.8 — loaded now
+    // so the runner already has it when that step is added.
+    const adrContext = JSON.stringify(adrIds);
+    void adrContext;
+
+    // Filter to pending proposals, oldest-first
+    const pendingProposals = knowledge0.queue
+      .filter((p) => p.status === "pending")
+      .sort((a, b) => a.submitted_at.localeCompare(b.submitted_at));
+
+    let session = session0;
+    let knowledge = knowledge0;
+    let emergencyLogged = false;
+
+    try {
+      for (const proposal of pendingProposals) {
+        // a — Budget check
+        if (this.isSessionBudgetExceeded(session)) {
+          onProgress("Session budget exceeded. Writing handoff log.");
+          break;
+        }
+
+        // b — Progress message
+        onProgress(
+          `Reviewing proposal ${proposal.proposal_id} ` +
+            `(${session.proposals_reviewed + 1}/${this.budget.max_proposals})...`,
+        );
+
+        // c — Review
+        const { result, updatedKnowledge, updatedSession } =
+          await this.reviewProposal(
+            proposal,
+            session,
+            knowledge,
+            scopeDefinitions,
+            hookConfig,
+          );
+
+        // d — Update state
+        knowledge = updatedKnowledge;
+        session = {
+          ...updatedSession,
+          proposals_reviewed: updatedSession.proposals_reviewed + 1,
+        };
+
+        // e — Atomic write
+        try {
+          await this.sklFileSystem.writeKnowledge(knowledge);
+        } catch (writeErr: unknown) {
+          const writeMsg =
+            writeErr instanceof Error ? writeErr.message : String(writeErr);
+          onProgress(
+            `FATAL: Failed to write knowledge.json after reviewing ${proposal.proposal_id}. Session aborted.`,
+          );
+          await this.writeEmergencyHandoffLog(
+            session,
+            `Write failure after ${proposal.proposal_id}: ${writeMsg}`,
+          );
+          emergencyLogged = true;
+          throw writeErr;
+        }
+
+        // f — Merge if approved
+        if (
+          result.decision === "approve" ||
+          result.decision === "auto_approve"
+        ) {
+          const repoRoot = this.sklFileSystem.repoRoot;
+          const mergeResult = await this.mergeBranch(proposal.branch, repoRoot);
+          if (mergeResult.conflict) {
+            onProgress(
+              `⚠️ Merge conflict on ${proposal.branch}. Resolve manually and resume.`,
+            );
+          } else if (!mergeResult.success) {
+            onProgress(
+              `Merge failed for ${proposal.branch}: ${mergeResult.error}`,
+            );
+          }
+        }
+
+        // g — Self-uncertainty tracking
+        const UNCERTAIN_WORDS = [
+          "unclear",
+          "ambiguous",
+          "uncertain",
+          "two valid approaches",
+        ] as const;
+        const lowerRationale = result.rationale.toLowerCase();
+        if (UNCERTAIN_WORDS.some((w) => lowerRationale.includes(w))) {
+          session = {
+            ...session,
+            consecutive_uncertain: session.consecutive_uncertain + 1,
+          };
+        } else {
+          session = { ...session, consecutive_uncertain: 0 };
+        }
+
+        if (
+          session.consecutive_uncertain >=
+          this.budget.self_uncertainty_threshold
+        ) {
+          session = {
+            ...session,
+            uncertain_decisions: [
+              ...session.uncertain_decisions,
+              `${proposal.proposal_id} — ${result.rationale.slice(0, 100)}`,
+            ],
+          };
+          onProgress("Self-uncertainty threshold reached. Writing handoff log.");
+          break;
+        }
+
+        // h — Budget status
+        onProgress(this.getBudgetStatus(session));
+      }
+    } catch (err: unknown) {
+      if (!emergencyLogged) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await this.writeEmergencyHandoffLog(
+          session,
+          `Session crashed: ${msg}`,
+        );
+      }
+      throw err;
+    }
+
+    await this.endSession(session);
+  }
+
+  /**
+   * Write an emergency handoff log for crash-recovery.
+   *
+   * Appends `reason` to `recurring_patterns_flagged` so the next session
+   * knows what went wrong, then calls `endSession` to flush the log to disk.
+   */
+  private async writeEmergencyHandoffLog(
+    session: OrchestratorSession,
+    reason: string,
+  ): Promise<void> {
+    const emergencySession: OrchestratorSession = {
+      ...session,
+      recurring_patterns_flagged: [
+        ...session.recurring_patterns_flagged,
+        reason,
+      ],
+    };
+    await this.endSession(emergencySession);
   }
 
   // TODO: implemented in substage 3.7
