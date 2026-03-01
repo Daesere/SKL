@@ -23,3 +23,10 @@ SKL v1.4 spec will be complete after this stage. Key constraints:
 - uncertainty_level can ONLY decrease — never increase automatically.
 - level 0 requires CI proof. level 1 requires human review. The
   Orchestrator and digest review must never touch level 0 records.
+
+## Stage 6 Context
+Stage 6 adds Phase 0 mode and adoption tooling. Core constraint:
+existing full SKL behaviour must not change. skl_mode: "full" (or
+absent) must behave identically to pre-Stage-6. Every change is
+additive. When in doubt about whether a change affects existing
+behaviour, stop and ask.
