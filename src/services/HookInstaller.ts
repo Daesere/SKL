@@ -11,10 +11,21 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import type * as vscode from "vscode";
+import * as vscode from "vscode";
+import type { SKLFileSystem } from "./SKLFileSystem.js";
 import { SKLWriteError } from "../errors/index.js";
+import type { HookConfig } from "../types/index.js";
 
-const execFile = promisify(execFileCb);
+const _defaultExecFile = promisify(execFileCb);
+
+/**
+ * Promisified execFile signature — injected so tests can mock Python
+ * detection without touching the real file system or process table.
+ */
+export type ExecFileFn = (
+  cmd: string,
+  args: string[],
+) => Promise<{ stdout: string; stderr: string }>;
 
 /** Marker written as the very first line of the managed hook script. */
 const HOOK_MARKER = "# SKL_HOOK_V1.4";
@@ -25,9 +36,14 @@ const HOOK_MARKER = "# SKL_HOOK_V1.4";
  */
 export class HookInstaller {
   private readonly extensionContext: vscode.ExtensionContext;
+  private readonly _execFile: ExecFileFn;
 
-  constructor(extensionContext: vscode.ExtensionContext) {
+  constructor(
+    extensionContext: vscode.ExtensionContext,
+    execFileFn?: ExecFileFn,
+  ) {
     this.extensionContext = extensionContext;
+    this._execFile = execFileFn ?? (_defaultExecFile as unknown as ExecFileFn);
   }
 
   // ── Public API ──────────────────────────────────────────────────
@@ -39,7 +55,7 @@ export class HookInstaller {
    */
   async getPythonVersion(executablePath: string): Promise<string | null> {
     try {
-      const { stdout, stderr } = await execFile(executablePath, [
+      const { stdout, stderr } = await this._execFile(executablePath, [
         "--version",
       ]);
       // Python 2 prints to stderr, Python 3 prints to stdout.
@@ -77,8 +93,36 @@ export class HookInstaller {
    */
   async install(
     repoRoot: string,
-    pythonExecutable: string,
+    hookConfig: HookConfig,
+    sklFileSystem: SKLFileSystem,
   ): Promise<void> {
+    // ── Step 1: Resolve the Python executable ─────────────────────────────
+    let pythonExecutable: string;
+
+    if (hookConfig.python_executable !== "python3") {
+      // User has manually set a non-default value — honour it as-is.
+      pythonExecutable = hookConfig.python_executable;
+    } else {
+      // Default value — probe for a working Python binary.
+      const detected = await this.detectPythonExecutable();
+      if (detected === null) {
+        void vscode.window.showErrorMessage(
+          "SKL: Python not found. Tried: python3, python, py.\n" +
+            "To fix this manually: open .skl/hook_config.json and set\n" +
+            '"python_executable" to the correct name for your system\n' +
+            '(usually "python" on Windows, "python3" on Mac/Linux).\n' +
+            "Then run 'SKL: Install Hook' again.",
+        );
+        return;
+      }
+      if (detected !== "python3") {
+        // Persist the working executable so future hook runs use it directly.
+        hookConfig.python_executable = detected;
+        await sklFileSystem.writeHookConfig(hookConfig);
+      }
+      pythonExecutable = detected;
+    }
+
     const hooksDir = path.join(repoRoot, ".git", "hooks");
     const targetPath = path.join(hooksDir, "pre-push");
 
@@ -114,7 +158,7 @@ export class HookInstaller {
     // Platform-specific post-install.
     if (process.platform !== "win32") {
       try {
-        await execFile("chmod", ["+x", targetPath]);
+        await this._execFile("chmod", ["+x", targetPath]);
       } catch {
         throw new SKLWriteError(
           targetPath,
@@ -161,6 +205,23 @@ export class HookInstaller {
   }
 
   // ── Private helpers ─────────────────────────────────────────────
+
+  /**
+   * Try each Python candidate in order and return the first one that
+   * exits successfully, or `null` if all fail.
+   */
+  private async detectPythonExecutable(): Promise<string | null> {
+    const candidates = ["python3", "python", "py"];
+    for (const candidate of candidates) {
+      try {
+        await this._execFile(candidate, ["--version"]);
+        return candidate;
+      } catch {
+        // Try next candidate.
+      }
+    }
+    return null;
+  }
 
   /**
    * If a `pre-push` file exists at *hookPath* and does **not** contain

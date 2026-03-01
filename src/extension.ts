@@ -31,17 +31,6 @@ async function installHookCommand(
 ): Promise<void> {
   try {
     const config = await skl.readHookConfig();
-    const exe = config.python_executable;
-
-    const version = await hookInstaller.getPythonVersion(exe);
-    if (version === null) {
-      void vscode.window.showErrorMessage(
-        `SKL: Python 3 not found at '${exe}'. Install Python 3.8+ and ` +
-          "ensure it is on your PATH, or update the python_executable " +
-          "setting via 'SKL: Configure Hook'.",
-      );
-      return;
-    }
 
     const installed = await hookInstaller.isInstalled(skl.repoRoot);
     if (installed) {
@@ -55,7 +44,7 @@ async function installHookCommand(
       }
     }
 
-    await hookInstaller.install(skl.repoRoot, exe);
+    await hookInstaller.install(skl.repoRoot, config, skl);
     void vscode.window.showInformationMessage(
       "SKL: Hook installed. Run 'SKL: Configure Agent' to set up an " +
         "agent context before the first push.",
@@ -373,20 +362,12 @@ export function activate(context: vscode.ExtensionContext): void {
             await skl.writeHookConfig(phase0Config);
             await skl.ensureSKLStructure();
 
-            // Install hook — warn but do not abort if Python is not found
+            // Install hook — show error but do not abort if Python is not found
             try {
-              const exe = phase0Config.python_executable;
-              const version = await hookInstaller.getPythonVersion(exe);
-              if (version === null) {
-                void vscode.window.showWarningMessage(
-                  "Python 3 not found. The enforcement hook was not installed. Install Python 3.8+ and run 'SKL: Install Hook' to complete setup.",
-                );
-              } else {
-                await hookInstaller.install(skl.repoRoot, exe);
-              }
+              await hookInstaller.install(skl.repoRoot, phase0Config, skl);
             } catch {
               void vscode.window.showWarningMessage(
-                "Python 3 not found. The enforcement hook was not installed. Install Python 3.8+ and run 'SKL: Install Hook' to complete setup.",
+                "Hook installation failed. Run 'SKL: Install Hook' to retry.",
               );
             }
 

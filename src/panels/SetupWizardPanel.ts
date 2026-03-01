@@ -273,7 +273,8 @@ export class SetupWizardPanel {
             const config = await this._skl.readHookConfig();
             await this._hookInstaller.install(
               this._skl.repoRoot,
-              config.python_executable,
+              config,
+              this._skl,
             );
             this._state.hookInstallStatus = "installed";
           } catch (err) {
