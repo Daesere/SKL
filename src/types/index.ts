@@ -89,3 +89,14 @@ export type { AgentContext } from "./AgentContext.js";
 // HookConfig
 export { HookConfigSchema, DEFAULT_HOOK_CONFIG } from "./HookConfig.js";
 export type { HookConfig } from "./HookConfig.js";
+
+// OrchestratorSession (Section 7)
+export {
+  SessionBudgetSchema,
+  DEFAULT_SESSION_BUDGET,
+  OrchestratorSessionSchema,
+} from "./OrchestratorSession.js";
+export type {
+  SessionBudget,
+  OrchestratorSession,
+} from "./OrchestratorSession.js";

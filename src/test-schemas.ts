@@ -398,3 +398,80 @@ console.log("");
 console.log("════════════════════════════════════");
 console.log("All 12 tests passed.");
 console.log("════════════════════════════════════");
+
+// ══════════════════════════════════════════════════════════════════════
+// Test 13: Invalid OrchestratorSession — session_id format
+// ══════════════════════════════════════════════════════════════════════
+console.log("\n=== Test 13: Invalid OrchestratorSession — bad session_id ===");
+
+import { OrchestratorSessionSchema, SessionBudgetSchema, DEFAULT_SESSION_BUDGET } from "./types/index.js";
+
+const badSessionId = OrchestratorSessionSchema.safeParse({
+  session_id: "session_abc",
+  session_start: "2026-02-28T12:00:00Z",
+  proposals_reviewed: 0,
+  circuit_breaker_counts: {},
+  consecutive_uncertain: 0,
+  escalations: [],
+  rfcs_opened: [],
+  uncertain_decisions: [],
+  circuit_breakers_triggered: [],
+  recurring_patterns_flagged: [],
+});
+if (!badSessionId.success) {
+  console.log("PASS — OrchestratorSession with 'session_abc' was correctly rejected.");
+  for (const issue of badSessionId.error.issues) {
+    console.log(`    - [${issue.path.join(".")}] ${issue.message}`);
+  }
+} else {
+  console.error("FAIL — OrchestratorSession with 'session_abc' should have been rejected.");
+  process.exit(1);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Test 14: Invalid OrchestratorSession — negative proposals_reviewed
+// ══════════════════════════════════════════════════════════════════════
+console.log("\n=== Test 14: Invalid OrchestratorSession — negative proposals_reviewed ===");
+
+const badProposalsReviewed = OrchestratorSessionSchema.safeParse({
+  session_id: "session_001",
+  session_start: "2026-02-28T12:00:00Z",
+  proposals_reviewed: -1,
+  circuit_breaker_counts: {},
+  consecutive_uncertain: 0,
+  escalations: [],
+  rfcs_opened: [],
+  uncertain_decisions: [],
+  circuit_breakers_triggered: [],
+  recurring_patterns_flagged: [],
+});
+if (!badProposalsReviewed.success) {
+  console.log("PASS — OrchestratorSession with proposals_reviewed: -1 was correctly rejected.");
+  for (const issue of badProposalsReviewed.error.issues) {
+    console.log(`    - [${issue.path.join(".")}] ${issue.message}`);
+  }
+} else {
+  console.error("FAIL — OrchestratorSession with negative proposals_reviewed should have been rejected.");
+  process.exit(1);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Test 15: DEFAULT_SESSION_BUDGET parses against SessionBudgetSchema
+// ══════════════════════════════════════════════════════════════════════
+console.log("\n=== Test 15: DEFAULT_SESSION_BUDGET validates ===");
+
+const budgetResult = SessionBudgetSchema.safeParse(DEFAULT_SESSION_BUDGET);
+if (budgetResult.success) {
+  console.log("PASS — DEFAULT_SESSION_BUDGET parsed successfully.");
+} else {
+  console.error("FAIL — DEFAULT_SESSION_BUDGET should parse without error.");
+  for (const issue of budgetResult.error.issues) {
+    console.error(`    - [${issue.path.join(".")}] ${issue.message}`);
+  }
+  process.exit(1);
+}
+
+console.log("");
+console.log("════════════════════════════════════");
+console.log("All 15 tests passed.");
+console.log("════════════════════════════════════");
