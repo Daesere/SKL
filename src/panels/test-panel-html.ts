@@ -20,8 +20,9 @@ import {
 } from "./orchestratorPanelHtml.js";
 import { generateDigestHtml } from "./digestPanelHtml.js";
 import { generateQueueHtml, generateHeatmapSection } from "./queuePanelHtml.js";
+import { generateRFCResolutionHtml } from "./rfcResolutionPanelHtml.js";
 import type { DigestReport } from "../services/DigestService.js";
-import type { StateRecord } from "../types/index.js";
+import type { StateRecord, Rfc } from "../types/index.js";
 
 const outDir = join(tmpdir(), "skl-panel-test");
 mkdirSync(outDir, { recursive: true });
@@ -367,3 +368,82 @@ if (rowCount !== 15) {
   throw new Error(`FAIL: top-15 cap — expected 15 heatmap-row divs, got ${rowCount}`);
 }
 console.log(`PASS: top-15 cap (${rowCount} rows rendered for 20 input records)`);
+
+// ── 8. RFC Resolution Panel ────────────────────────────────────
+
+const mockRfc: Rfc = {
+  id: "RFC_007",
+  status: "open",
+  created_at: new Date().toISOString(),
+  triggering_proposal: "prop-auth-042",
+  decision_required: "Should the auth service switch from session-based to stateless JWT authentication?",
+  context: "The current session store creates coupling between auth and data layer. Moving to JWT would decouple them but requires rotating secrets and updating all token consumers.",
+  option_a: {
+    description: "Migrate to stateless JWT immediately",
+    consequences: "Clean decoupling but requires coordinating token rotation across all consumers in a single release.",
+  },
+  option_b: {
+    description: "Introduce JWT alongside sessions, deprecate sessions over two sprints",
+    consequences: "Gradual migration reduces risk but increases complexity short-term.",
+  },
+  option_c: {
+    description: "Keep session-based auth and document the coupling explicitly",
+    consequences: "No migration cost, but architectural debt persists.",
+  },
+  orchestrator_recommendation: "option_b",
+  orchestrator_rationale: "Gradual migration balances risk and completeness.",
+  option_rankings: [
+    {
+      option: "option_a",
+      effort_score: 7,
+      risk_score: 8,
+      invariant_alignment_score: 9,
+      composite_score: 6,
+      recommended: false,
+      ranking_rationale: "High effort and risk despite good invariant alignment.",
+    },
+    {
+      option: "option_b",
+      effort_score: 5,
+      risk_score: 4,
+      invariant_alignment_score: 9,
+      composite_score: 0,
+      recommended: true,
+      ranking_rationale: "Best balance of effort, risk, and invariant alignment.",
+    },
+    {
+      option: "option_c",
+      effort_score: 1,
+      risk_score: 2,
+      invariant_alignment_score: 3,
+      composite_score: 0,
+      recommended: false,
+      ranking_rationale: "Lowest effort but poor long-term alignment.",
+    },
+  ],
+  recommended_human_rationale: "I recommend option_b because it allows a controlled migration with validation checkpoints. You may accept, edit, or replace this rationale entirely.",
+  draft_acceptance_criteria: [
+    {
+      id: "ac_draft_001",
+      description: "All existing auth integration tests must pass after JWT rollout",
+      check_type: "test",
+      check_reference: "npm run test:auth",
+      rationale: "Ensures backward compatibility during migration.",
+      status: "pending",
+    },
+    {
+      id: "ac_draft_002",
+      description: "Token expiry edge cases validated in staging environment",
+      check_type: "manual",
+      check_reference: "docs/staging-auth-checklist.md",
+      rationale: "JWT expiry behaviour cannot be fully automated.",
+      status: "pending",
+    },
+  ],
+  human_response_deadline: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+};
+
+const rfcResolutionHtml = generateRFCResolutionHtml(mockRfc);
+writeFileSync(join(outDir, "test-rfc-resolution.html"), rfcResolutionHtml, "utf8");
+console.log(`Wrote: ${join(outDir, "test-rfc-resolution.html")}`);
+console.log(`  file://${join(outDir, "test-rfc-resolution.html")}`);
