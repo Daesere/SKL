@@ -88,7 +88,7 @@ writes State, and produces session handoff logs.
 
 ---
 
-## Stage 4 — CI Integration and Acceptance Criteria ⏳
+## Stage 4 — CI Integration and Acceptance Criteria 🔄 In progress
 
 **Goal:** RFC acceptance criteria status updates driven by CI results.
 ADR promotion. uncertainty_level reduction via passing tests.
