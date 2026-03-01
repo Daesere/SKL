@@ -148,7 +148,7 @@ Every interaction starts from a well-reasoned draft rather than a blank input.
 
 ---
 
-## Stage 6 — Phase 0 Mode and Adoption Tooling ⏳
+## Stage 6 — Phase 0 Mode and Adoption Tooling ✅
 
 **Goal:** Lower the onboarding barrier by introducing Phase 0 — a reduced-
 friction mode that requires no scope definitions. Existing full SKL behaviour
@@ -182,14 +182,15 @@ is unchanged. Every change in this stage is additive.
 
 ## Implementation Complete
 
-All four stages of the SKL v1.4 reference specification plus the Stage 5
-developer experience layer are implemented. The system guarantees that
-coordination-relevant uncertainty, assumptions, and cross-scope dependencies
-cannot propagate implicitly. The developer experience layer ensures that every
-human-facing decision point starts from a well-reasoned draft rather than a
-blank input box.
+Six stages. A complete SKL v1.4 implementation plus developer experience
+improvements (Stage 5) and an adoption layer (Stage 6).
 
-For extension work beyond v1.5, see SPEC.md Section 12 (Operational
+The system guarantees that coordination-relevant uncertainty, assumptions,
+and cross-scope dependencies cannot propagate implicitly. Phase 0 mode
+lets new users see this in under ten minutes before committing to the full
+governance layer.
+
+For extension work beyond v1.4, see SPEC.md Section 12 (Operational
 Limits) for the constraints any extension must respect.
 
 ---
