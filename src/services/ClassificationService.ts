@@ -114,3 +114,17 @@ export function isEligibleForAutoApproval(
 
   return true;
 }
+
+/**
+ * Returns true if the proposal needs an LLM verifier pass (Stage 2).
+ *
+ * Stage 1 not firing is the definition of ambiguous — the verifier
+ * runs only when the deterministic rules could not resolve it.
+ * See Section 6.3.
+ */
+export function needsVerifierPass(
+  _proposal: QueueProposal,
+  stage1Result: ClassificationResult,
+): boolean {
+  return !stage1Result.stage1_override;
+}

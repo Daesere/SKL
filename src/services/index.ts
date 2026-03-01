@@ -6,4 +6,5 @@ export {
   applyStage1Overrides,
   requiresMandatoryIndividualReview,
   isEligibleForAutoApproval,
+  needsVerifierPass,
 } from "./ClassificationService.js";

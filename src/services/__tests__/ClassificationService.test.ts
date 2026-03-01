@@ -11,6 +11,7 @@ import {
   applyStage1Overrides,
   requiresMandatoryIndividualReview,
   isEligibleForAutoApproval,
+  needsVerifierPass,
 } from "../ClassificationService.js";
 import type { QueueProposal, RiskSignals, ChangeType, Assumption, ClassificationResult } from "../../types/index.js";
 
@@ -274,6 +275,28 @@ console.log("\nrequiresMandatoryIndividualReview\n");
   const proposal = makeProposal({ change_type: "behavioral" });
   const result: ClassificationResult = { resolved_change_type: "behavioral", stage1_override: false, override_reason: null };
   assert(requiresMandatoryIndividualReview(proposal, result) === false, "Test 14: no signals, no override → no mandatory review");
+}
+
+/* ================================================================== */
+console.log("\nneedsVerifierPass\n");
+/* ================================================================== */
+
+/* ------------------------------------------------------------------ */
+/*  Test 15: stage1_override true → no verifier pass needed            */
+/* ------------------------------------------------------------------ */
+{
+  const proposal = makeProposal();
+  const result: ClassificationResult = { resolved_change_type: "mechanical", stage1_override: true, override_reason: "AST confirms mechanical-only change" };
+  assert(needsVerifierPass(proposal, result) === false, "Test 15: stage1_override true → no verifier pass");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 16: stage1_override false → verifier pass needed              */
+/* ------------------------------------------------------------------ */
+{
+  const proposal = makeProposal({ change_type: "behavioral" });
+  const result: ClassificationResult = { resolved_change_type: "behavioral", stage1_override: false, override_reason: null };
+  assert(needsVerifierPass(proposal, result) === true, "Test 16: stage1_override false → verifier pass needed");
 }
 
 /* ------------------------------------------------------------------ */

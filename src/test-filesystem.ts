@@ -239,6 +239,67 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // ── Test 13: recordClassificationDisagreement — immutable, counts ─
+  console.log("\n=== Test 13: recordClassificationDisagreement ===" );
+  const baseSession: import("./types/index.js").OrchestratorSession = {
+    session_id: "session_001",
+    session_start: new Date().toISOString(),
+    proposals_reviewed: 0,
+    circuit_breaker_counts: {},
+    consecutive_uncertain: 0,
+    escalations: [],
+    rfcs_opened: [],
+    uncertain_decisions: [],
+    circuit_breakers_triggered: [],
+    recurring_patterns_flagged: [],
+  };
+  const after1 = orch.recordClassificationDisagreement(baseSession, "agent-x");
+  const after2 = orch.recordClassificationDisagreement(after1, "agent-x");
+  if (
+    after2.circuit_breaker_counts["agent-x"] === 2 &&
+    (baseSession.circuit_breaker_counts["agent-x"] ?? 0) === 0
+  ) {
+    console.log("PASS — count is 2, original session unchanged");
+  } else {
+    console.error("FAIL — expected count 2 and original untouched");
+    process.exit(1);
+  }
+
+  // ── Test 14: isCircuitBreakerTriggered with threshold ────────────
+  console.log("\n=== Test 14: isCircuitBreakerTriggered ===" );
+  const { DEFAULT_HOOK_CONFIG: hookCfg } = await import("./types/index.js");
+  // hookCfg.circuit_breaker_threshold defaults to 3
+  const sessionAt2: import("./types/index.js").OrchestratorSession = {
+    ...baseSession,
+    circuit_breaker_counts: { "agent-y": 2 },
+  };
+  const sessionAt3: import("./types/index.js").OrchestratorSession = {
+    ...baseSession,
+    circuit_breaker_counts: { "agent-y": 3 },
+  };
+  const notTriggered = orch.isCircuitBreakerTriggered(sessionAt2, "agent-y", hookCfg);
+  const triggered = orch.isCircuitBreakerTriggered(sessionAt3, "agent-y", hookCfg);
+  if (!notTriggered && triggered) {
+    console.log("PASS — count 2 < threshold 3 → false; count 3 >= threshold 3 → true");
+  } else {
+    console.error(`FAIL — expected false/true, got ${notTriggered}/${triggered}`);
+    process.exit(1);
+  }
+
+  // ── Test 15: flagCircuitBreakerTriggered — no duplicates ─────────
+  console.log("\n=== Test 15: flagCircuitBreakerTriggered no duplicates ===" );
+  const flagged1 = orch.flagCircuitBreakerTriggered(baseSession, "agent-z", "prop-001");
+  const flagged2 = orch.flagCircuitBreakerTriggered(flagged1, "agent-z", "prop-002");
+  if (
+    flagged2.circuit_breakers_triggered.length === 1 &&
+    flagged2.circuit_breakers_triggered[0] === "agent-z circuit breaker triggered at prop-001"
+  ) {
+    console.log("PASS — only one entry for agent-z despite two calls");
+  } else {
+    console.error("FAIL — expected single entry", flagged2.circuit_breakers_triggered);
+    process.exit(1);
+  }
+
   // Cleanup
   await fs.rm(skl.sklDir, { recursive: true, force: true });
   console.log("\nAll filesystem tests passed. Cleaned up .skl/");

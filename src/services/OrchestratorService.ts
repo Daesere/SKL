@@ -5,6 +5,7 @@ import type {
   OrchestratorSession,
   SessionLog,
   QueueProposal,
+  HookConfig,
 } from "../types/index.js";
 import { DEFAULT_SESSION_BUDGET } from "../types/index.js";
 
@@ -133,6 +134,69 @@ export class OrchestratorService {
   /** The prior session log loaded during initialize(), or null. */
   getPriorSessionLog(): SessionLog | null {
     return this.priorSessionLog;
+  }
+
+  // ── Circuit breaker (Section 6.3) ────────────────────────────────
+
+  /**
+   * Record a classification disagreement for an agent.
+   *
+   * Returns a **new** session object — does not mutate the input.
+   */
+  recordClassificationDisagreement(
+    session: OrchestratorSession,
+    agentId: string,
+  ): OrchestratorSession {
+    const currentCount = session.circuit_breaker_counts[agentId] ?? 0;
+    return {
+      ...session,
+      circuit_breaker_counts: {
+        ...session.circuit_breaker_counts,
+        [agentId]: currentCount + 1,
+      },
+    };
+  }
+
+  /**
+   * Check whether the circuit breaker has been triggered for an agent.
+   *
+   * Takes HookConfig as a parameter to stay pure — no I/O.
+   */
+  isCircuitBreakerTriggered(
+    session: OrchestratorSession,
+    agentId: string,
+    config: HookConfig,
+  ): boolean {
+    return (
+      (session.circuit_breaker_counts[agentId] ?? 0) >=
+      config.circuit_breaker_threshold
+    );
+  }
+
+  /**
+   * Append a circuit breaker triggered message for an agent.
+   *
+   * Returns a **new** session object. Does not duplicate entries
+   * for the same agent within a session.
+   */
+  flagCircuitBreakerTriggered(
+    session: OrchestratorSession,
+    agentId: string,
+    proposalId: string,
+  ): OrchestratorSession {
+    const alreadyFlagged = session.circuit_breakers_triggered.some(
+      (entry) => entry.startsWith(`${agentId} circuit breaker`),
+    );
+    if (alreadyFlagged) {
+      return session;
+    }
+    return {
+      ...session,
+      circuit_breakers_triggered: [
+        ...session.circuit_breakers_triggered,
+        `${agentId} circuit breaker triggered at ${proposalId}`,
+      ],
+    };
   }
 
   // ── Stubs — implemented in later substages ───────────────────────
