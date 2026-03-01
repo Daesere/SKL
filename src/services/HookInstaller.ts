@@ -72,7 +72,12 @@ export class HookInstaller {
    */
   async isInstalled(repoRoot: string): Promise<boolean> {
     const hooksDir = await this.getHooksDir(repoRoot);
-    const hookPath = path.join(hooksDir, "pre-push");
+    // On Windows the Python script is stored as pre-push.py; on Unix it is
+    // the bare pre-push file.
+    const hookPath =
+      process.platform === "win32"
+        ? path.join(hooksDir, "pre-push.py")
+        : path.join(hooksDir, "pre-push");
     try {
       const content = await fs.readFile(hookPath, "utf-8");
       return content.slice(0, 50).includes(HOOK_MARKER);
@@ -149,15 +154,20 @@ export class HookInstaller {
       "pre-push.py",
     );
 
-    // Copy hook script to target.
-    try {
-      await fs.copyFile(sourcePath, targetPath);
-    } catch (cause) {
-      throw new SKLWriteError(targetPath, cause);
-    }
-
-    // Platform-specific post-install.
     if (process.platform !== "win32") {
+      // ── Unix / Mac ───────────────────────────────────────────────────────
+      // Copy the Python script to the extensionless `pre-push` hook file and
+      // set the executable bit. Git executes this file directly via the
+      // shebang or treats it as a shell script depending on content.
+      // Back up any pre-existing non-SKL hook.
+      await this.backupExistingHook(targetPath);
+
+      try {
+        await fs.copyFile(sourcePath, targetPath);
+      } catch (cause) {
+        throw new SKLWriteError(targetPath, cause);
+      }
+
       try {
         await this._execFile("chmod", ["+x", targetPath]);
       } catch {
@@ -169,9 +179,27 @@ export class HookInstaller {
         );
       }
     } else {
-      // Git for Windows invokes .cmd hooks — write a thin wrapper.
+      // ── Windows ─────────────────────────────────────────────────────────
+      // Git for Windows will try `pre-push` (no extension) before
+      // `pre-push.cmd`. If a bare `pre-push` exists without a recognised
+      // interpreter, Git emits "cannot spawn … pre-push" and aborts.
+      //
+      // Strategy: copy the Python script as `pre-push.py` and create a
+      // `pre-push.cmd` batch wrapper. No bare `pre-push` file is written,
+      // so Git falls straight to the `.cmd` hook.
+      const pyTargetPath = targetPath + ".py";
       const cmdPath = targetPath + ".cmd";
-      const cmdContent = `@"${pythonExecutable}" "${targetPath}" %*\n`;
+
+      // Back up any pre-existing non-SKL hook files.
+      await this.backupExistingHook(pyTargetPath);
+
+      try {
+        await fs.copyFile(sourcePath, pyTargetPath);
+      } catch (cause) {
+        throw new SKLWriteError(pyTargetPath, cause);
+      }
+
+      const cmdContent = `@echo off\r\n"${pythonExecutable}" "%~dp0pre-push.py" %*\r\n`;
       try {
         await fs.writeFile(cmdPath, cmdContent, "utf-8");
       } catch (cause) {
@@ -189,19 +217,30 @@ export class HookInstaller {
   async uninstall(repoRoot: string): Promise<void> {
     const hooksDir = await this.getHooksDir(repoRoot);
     const hookPath = path.join(hooksDir, "pre-push");
-    const backupPath = hookPath + ".skl-backup";
-    const cmdPath = hookPath + ".cmd";
 
-    // Remove the hook file (and optional .cmd wrapper).
-    await this.silentUnlink(hookPath);
-    await this.silentUnlink(cmdPath);
-
-    // Restore any backup.
-    try {
-      await fs.access(backupPath);
-      await fs.rename(backupPath, hookPath);
-    } catch {
-      // No backup to restore — nothing to do.
+    if (process.platform === "win32") {
+      // Windows install wrote pre-push.py + pre-push.cmd (no bare pre-push).
+      const pyPath = hookPath + ".py";
+      const cmdPath = hookPath + ".cmd";
+      await this.silentUnlink(pyPath);
+      await this.silentUnlink(cmdPath);
+      // Restore .py backup if one exists.
+      const pyBackup = pyPath + ".skl-backup";
+      try {
+        await fs.access(pyBackup);
+        await fs.rename(pyBackup, pyPath);
+      } catch {
+        // No backup.
+      }
+    } else {
+      const backupPath = hookPath + ".skl-backup";
+      await this.silentUnlink(hookPath);
+      try {
+        await fs.access(backupPath);
+        await fs.rename(backupPath, hookPath);
+      } catch {
+        // No backup to restore — nothing to do.
+      }
     }
   }
 

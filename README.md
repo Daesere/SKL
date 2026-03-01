@@ -97,18 +97,23 @@ The full SKL v1.4 reference specification is in `SPEC.md`.
 
 ### Pre-push hook
 
-Git for Windows cannot reliably execute `#!/bin/sh` shell-script hooks when
-invoked from a PowerShell or CMD terminal. SKL solves this with a dual-file
-strategy in `.githooks/`:
+Git for Windows cannot reliably execute extensionless hook scripts when
+invoked from a PowerShell or CMD terminal because the Unix interpreter
+(`/bin/sh`, `/usr/bin/env`) is not on the standard Windows `PATH`.
+SKL uses a `.cmd` file instead, which `cmd.exe` can execute natively.
 
-| File | Used by |
+| File | Purpose |
 |---|---|
-| `pre-push` | Mac, Linux, Git Bash on Windows — Python script with `#!/usr/bin/env python3` |
-| `pre-push.cmd` | Windows PowerShell / CMD — native batch wrapper that calls `python pre-push.py` |
+| `.githooks/pre-push.cmd` | Windows — batch wrapper that calls `python pre-push.py` |
+| `.githooks/pre-push.py` | The actual Python hook (used by both platforms) |
 
-Git for Windows prefers `pre-push.cmd` when running from a non-POSIX terminal
-because the `.cmd` file is directly executable by `cmd.exe`. On Mac/Linux, only
-`pre-push` (no extension) is ever considered by Git.
+**Mac/Linux developers:** Git only considers the extensionless `pre-push`
+file. Create a thin shell wrapper once after cloning:
+
+```sh
+printf '#!/bin/sh\nexec python3 "$(dirname "$0")/pre-push.py" "$@"\n' \
+  > .githooks/pre-push && chmod +x .githooks/pre-push
+```
 
 **Repos where you install SKL via the extension:** `HookInstaller` detects
 `process.platform === 'win32'` and writes a `pre-push.cmd` wrapper alongside
