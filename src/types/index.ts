@@ -149,3 +149,14 @@ export const AssumptionConflictResultSchema = z.object({
   conflict_description: z.string().nullable(),
 });
 export type AssumptionConflictResult = z.infer<typeof AssumptionConflictResultSchema>;
+
+// RFCTriggerReason (Section 9.1)
+export const RFCTriggerReasonSchema = z.enum([
+  "architectural_change_type",
+  "invariant_modification_required",
+  "new_external_dependency",
+  "high_fan_in_interface_change",
+  "invariant_ambiguity_resolution",
+  "shared_assumption_conflict",
+]);
+export type RFCTriggerReason = z.infer<typeof RFCTriggerReasonSchema>;

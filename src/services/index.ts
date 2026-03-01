@@ -2,6 +2,7 @@ export { SKLFileSystem } from "./SKLFileSystem.js";
 export { HookInstaller } from "./HookInstaller.js";
 export { OrchestratorService } from "./OrchestratorService.js";
 export { VerifierService } from "./VerifierService.js";
+export { detectRFCTrigger } from "./RFCService.js";
 export {
   detectStateConflict,
   isUncertaintyLevel3,
