@@ -318,6 +318,143 @@ await testAsync("Test 7 — execFile throws → returns failed result without re
 });
 
 // ---------------------------------------------------------------------------
+// Private-method access helper (no any allowed)
+// ---------------------------------------------------------------------------
+
+type CIInternal = {
+  parseJUnitXML: (xml: string) => string[];
+  parseJestJSON: (json: string) => string[];
+  updateStateRecordsFromPassingTests: (paths: string[]) => Promise<number>;
+};
+
+function internals(svc: CICheckService): CIInternal {
+  return svc as unknown as CIInternal;
+}
+
+// ---------------------------------------------------------------------------
+// CICheckService — Tests 8-15: parsers + updateStateRecordsFromPassingTests
+// ---------------------------------------------------------------------------
+
+console.log("\nCICheckService — parseJUnitXML");
+console.log("================================");
+
+await testAsync("Test 8 — parseJUnitXML: passing suite → returns normalised file path", async () => {
+  const xml = `
+<testsuites>
+  <testsuite name="Suite" file="tests/test_auth.py">
+    <testcase classname="tests.test_auth" name="test_login"/>
+  </testsuite>
+</testsuites>`;
+  const svc = new CICheckService(makeMockFs({}), makeOutputChannel() as never, EXEC_PASS);
+  const result = internals(svc).parseJUnitXML(xml);
+  assertEqual(result.length, 1, "result.length");
+  if (!result[0].includes("test_auth.py")) {
+    throw new Error(`Expected result to include test_auth.py, got: ${result[0]}`);
+  }
+});
+
+await testAsync("Test 9 — parseJUnitXML: suite with <failure> → excluded from results", async () => {
+  const xml = `
+<testsuites>
+  <testsuite name="Failing" file="tests/test_fail.py">
+    <testcase classname="tests.test_fail" name="test_broken">
+      <failure message="AssertionError">oops</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="Passing" file="tests/test_pass.py">
+    <testcase classname="tests.test_pass" name="test_ok"/>
+  </testsuite>
+</testsuites>`;
+  const svc = new CICheckService(makeMockFs({}), makeOutputChannel() as never, EXEC_PASS);
+  const result = internals(svc).parseJUnitXML(xml);
+  assertEqual(result.length, 1, "result.length (only passing suite)");
+  if (!result[0].includes("test_pass.py")) {
+    throw new Error(`Expected result to include test_pass.py, got: ${result[0]}`);
+  }
+});
+
+await testAsync("Test 10 — parseJUnitXML: malformed input → empty array, no throw", async () => {
+  const svc = new CICheckService(makeMockFs({}), makeOutputChannel() as never, EXEC_PASS);
+  const result = internals(svc).parseJUnitXML("not xml at all <<<!!!");
+  assertEqual(result.length, 0, "result.length");
+});
+
+console.log("\nCICheckService — parseJestJSON");
+console.log("================================");
+
+await testAsync("Test 11 — parseJestJSON: passed entry → returns normalised file path", async () => {
+  const json = JSON.stringify({
+    testResults: [
+      { testFilePath: "src/auth.test.ts", status: "passed" },
+    ],
+  });
+  const svc = new CICheckService(makeMockFs({}), makeOutputChannel() as never, EXEC_PASS);
+  const result = internals(svc).parseJestJSON(json);
+  assertEqual(result.length, 1, "result.length");
+  if (!result[0].includes("auth.test.ts")) {
+    throw new Error(`Expected result to include auth.test.ts, got: ${result[0]}`);
+  }
+});
+
+await testAsync("Test 12 — parseJestJSON: failed entry → excluded from results", async () => {
+  const json = JSON.stringify({
+    testResults: [
+      { testFilePath: "src/auth.test.ts", status: "failed" },
+    ],
+  });
+  const svc = new CICheckService(makeMockFs({}), makeOutputChannel() as never, EXEC_PASS);
+  const result = internals(svc).parseJestJSON(json);
+  assertEqual(result.length, 0, "result.length");
+});
+
+await testAsync("Test 13 — parseJestJSON: malformed input → empty array, no throw", async () => {
+  const svc = new CICheckService(makeMockFs({}), makeOutputChannel() as never, EXEC_PASS);
+  const result = internals(svc).parseJestJSON("{not valid json{{");
+  assertEqual(result.length, 0, "result.length");
+});
+
+console.log("\nCICheckService — updateStateRecordsFromPassingTests");
+console.log("====================================================");
+
+await testAsync("Test 14 — matching level-2 record → uncertainty_level set to 0, writeKnowledge called once", async () => {
+  // Use a simple filename with no separators so path.normalize is a no-op cross-platform.
+  const record = makeStateRecord({
+    id: "app_auth",
+    uncertainty_reduced_by: "test_auth.py",
+    uncertainty_level: 2,
+  });
+  const writeCapture: KnowledgeFile[] = [];
+  const fs = makeMockFs({
+    knowledge: makeKnowledge([record]),
+    writeCapture,
+  });
+  const svc = new CICheckService(fs, makeOutputChannel() as never, EXEC_PASS);
+
+  const count = await internals(svc).updateStateRecordsFromPassingTests(["test_auth.py"]);
+  assertEqual(count, 1, "updated count");
+  assertEqual(writeCapture.length, 1, "writeKnowledge call count");
+  assertEqual(writeCapture[0].state[0].uncertainty_level, 0, "written uncertainty_level");
+});
+
+await testAsync("Test 15 — record already at level 0 → no writeKnowledge call", async () => {
+  const record = makeStateRecord({
+    id: "app_auth",
+    uncertainty_reduced_by: "test_auth.py",
+    uncertainty_level: 0,
+  });
+  const writeCapture: KnowledgeFile[] = [];
+  const fs = makeMockFs({
+    knowledge: makeKnowledge([record]),
+    writeCapture,
+  });
+  const svc = new CICheckService(fs, makeOutputChannel() as never, EXEC_PASS);
+
+  const count = await internals(svc).updateStateRecordsFromPassingTests(["test_auth.py"]);
+  assertEqual(count, 0, "updated count");
+  assertEqual(writeCapture.length, 0, "writeKnowledge should not be called");
+});
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

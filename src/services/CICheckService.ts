@@ -12,6 +12,7 @@
 
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type { SKLFileSystem } from "./SKLFileSystem.js";
 import { SKLFileNotFoundError } from "../errors/index.js";
@@ -188,5 +189,135 @@ export class CICheckService {
       output: combinedOutput,
       checked_at: checkedAt,
     };
+  }
+
+  // ── CI result file parsers ────────────────────────────────────────
+
+  /**
+   * Parse a JUnit XML report and return the file paths of suites that
+   * passed (i.e. have no <failure> or <error> child elements).
+   * Returns empty array on any parse error — never throws.
+   */
+  private parseJUnitXML(xmlContent: string): string[] {
+    try {
+      const results: string[] = [];
+      const suiteRegex = /<testsuite[^>]+file="([^"]+)"[^>]*>([\s\S]*?)<\/testsuite>/g;
+      let match: RegExpExecArray | null;
+      while ((match = suiteRegex.exec(xmlContent)) !== null) {
+        const filePath = match[1];
+        const suiteContent = match[2];
+        if (!suiteContent.includes("<failure") && !suiteContent.includes("<error")) {
+          results.push(path.normalize(filePath));
+        }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Parse a Jest JSON report and return the file paths of test files
+   * where status === "passed".
+   * Returns empty array on any parse error — never throws.
+   */
+  private parseJestJSON(jsonContent: string): string[] {
+    try {
+      const parsed = JSON.parse(jsonContent) as {
+        testResults?: Array<{ testFilePath: string; status: string }>;
+      };
+      if (!Array.isArray(parsed.testResults)) return [];
+      return parsed.testResults
+        .filter((r) => r.status === "passed")
+        .map((r) => path.normalize(r.testFilePath));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * For each State record whose uncertainty_reduced_by (normalised) appears
+   * in passingTestPaths and whose uncertainty_level is not already 0:
+   * set uncertainty_level to 0 and write once atomically.
+   *
+   * Returns the count of records updated.
+   */
+  private async updateStateRecordsFromPassingTests(
+    passingTestPaths: string[],
+  ): Promise<number> {
+    const knowledge = await this.sklFileSystem.readKnowledge();
+    let updatedCount = 0;
+
+    const updatedState = knowledge.state.map((record) => {
+      if (!record.uncertainty_reduced_by) return record;
+      const normalizedRef = path.normalize(record.uncertainty_reduced_by);
+      if (!passingTestPaths.includes(normalizedRef)) return record;
+      if (record.uncertainty_level === 0) return record; // already verified
+      updatedCount++;
+      return { ...record, uncertainty_level: 0 as const };
+    });
+
+    if (updatedCount > 0) {
+      await this.sklFileSystem.writeKnowledge({ ...knowledge, state: updatedState });
+      this.outputChannel.appendLine(
+        `CI watcher: ${updatedCount} State entries reduced to uncertainty_level 0.`,
+      );
+    }
+
+    return updatedCount;
+  }
+
+  // ── File watcher registration ─────────────────────────────────────
+
+  /**
+   * Register file system watchers for CI result artifacts.
+   *
+   * Watched glob patterns:
+   *   pytest-results*.xml  (any directory depth)
+   *   test-results*.xml    (any directory depth)
+   *   jest-results*.json   (any directory depth)
+   *
+   * On creation or change: parse the file and reduce matching State
+   * records to uncertainty_level 0 in one atomic write.
+   */
+  registerFileWatchers(context: vscode.ExtensionContext): void {
+    const xmlWatcher1 = vscode.workspace.createFileSystemWatcher("**/pytest-results*.xml");
+    const xmlWatcher2 = vscode.workspace.createFileSystemWatcher("**/test-results*.xml");
+    const jsonWatcher = vscode.workspace.createFileSystemWatcher("**/jest-results*.json");
+
+    const handleXml = (uri: vscode.Uri): void => {
+      void (async () => {
+        try {
+          const bytes = await vscode.workspace.fs.readFile(uri);
+          const content = Buffer.from(bytes).toString("utf-8");
+          const passing = this.parseJUnitXML(content);
+          await this.updateStateRecordsFromPassingTests(passing);
+        } catch {
+          // Silently ignore read/parse errors — watcher is passive
+        }
+      })();
+    };
+
+    const handleJson = (uri: vscode.Uri): void => {
+      void (async () => {
+        try {
+          const bytes = await vscode.workspace.fs.readFile(uri);
+          const content = Buffer.from(bytes).toString("utf-8");
+          const passing = this.parseJestJSON(content);
+          await this.updateStateRecordsFromPassingTests(passing);
+        } catch {
+          // Silently ignore read/parse errors — watcher is passive
+        }
+      })();
+    };
+
+    xmlWatcher1.onDidCreate(handleXml);
+    xmlWatcher1.onDidChange(handleXml);
+    xmlWatcher2.onDidCreate(handleXml);
+    xmlWatcher2.onDidChange(handleXml);
+    jsonWatcher.onDidCreate(handleJson);
+    jsonWatcher.onDidChange(handleJson);
+
+    context.subscriptions.push(xmlWatcher1, xmlWatcher2, jsonWatcher);
   }
 }

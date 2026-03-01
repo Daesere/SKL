@@ -56,6 +56,7 @@ export default tseslint.config(
       "src/services/HookInstaller.ts", // operates on .git/hooks/, not .skl/
       "src/services/ConflictDetectionService.ts", // needs path.normalize for path comparison
       "src/services/StateWriterService.ts", // needs path.normalize for deriveStateId
+      "src/services/CICheckService.ts", // needs path.normalize for CI result path matching + vscode.workspace.fs in registerFileWatchers
       "src/test-filesystem.ts", // legitimately needs direct fs for integration tests
       "src/panels/test-panel-html.ts", // developer smoke-test script — needs fs/path/os
       "src/testing/**",
