@@ -21,8 +21,9 @@ import {
 import { generateDigestHtml } from "./digestPanelHtml.js";
 import { generateQueueHtml, generateHeatmapSection } from "./queuePanelHtml.js";
 import { generateRFCResolutionHtml } from "./rfcResolutionPanelHtml.js";
+import { generateActivityFeedHtml } from "./activityFeedHtml.js";
 import type { DigestReport } from "../services/DigestService.js";
-import type { StateRecord, Rfc } from "../types/index.js";
+import type { StateRecord, Rfc, QueueProposal } from "../types/index.js";
 
 const outDir = join(tmpdir(), "skl-panel-test");
 mkdirSync(outDir, { recursive: true });
@@ -455,3 +456,151 @@ const rfcResolutionHtml = generateRFCResolutionHtml(mockRfc);
 writeFileSync(join(outDir, "test-rfc-resolution.html"), rfcResolutionHtml, "utf8");
 console.log(`Wrote: ${join(outDir, "test-rfc-resolution.html")}`);
 console.log(`  file://${join(outDir, "test-rfc-resolution.html")}`);
+
+// ── Activity Feed: Phase 0 with 5 mock proposals ─────────────
+
+function makeRiskSignals(overrides: Partial<QueueProposal["risk_signals"]> = {}): QueueProposal["risk_signals"] {
+  return {
+    touched_auth_or_permission_patterns: false,
+    public_api_signature_changed: false,
+    invariant_referenced_file_modified: false,
+    high_fan_in_module_modified: false,
+    ast_change_type: "behavioral",
+    mechanical_only: false,
+    ...overrides,
+  };
+}
+
+const mockProposals: (QueueProposal & { blocking_reasons?: string[] })[] = [
+  {
+    proposal_id: "p-001",
+    agent_id: "Agent-1",
+    path: "src/auth/jwtValidator.ts",
+    semantic_scope: "auth",
+    scope_schema_version: "1.0",
+    change_type: "behavioral",
+    responsibilities: "Validates JWT tokens for incoming API requests.",
+    dependencies: ["src/config/env.ts"],
+    invariants_touched: ["jwt-secret-rotation"],
+    assumptions: [],
+    uncertainty_delta: "+0",
+    rationale: "Updated token expiry logic to handle refresh tokens.",
+    out_of_scope: false,
+    cross_scope_flag: false,
+    branch: "agent-1/fix-jwt-expiry",
+    risk_signals: makeRiskSignals({ touched_auth_or_permission_patterns: true }),
+    classification_verification: { agent_classification: "behavioral", verifier_classification: "behavioral", agreement: true, stage1_override: false },
+    dependency_scan: { undeclared_imports: [], stale_declared_deps: [], cross_scope_undeclared: [] },
+    agent_reasoning_summary: "The previous expiry logic did not account for leeway in clock skew between services.",
+    status: "approved",
+    submitted_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+  },
+  {
+    proposal_id: "p-002",
+    agent_id: "Agent-2",
+    path: "src/payments/stripeWebhook.ts",
+    semantic_scope: "payments",
+    scope_schema_version: "1.0",
+    change_type: "architectural",
+    responsibilities: "Handles incoming Stripe webhook events.",
+    dependencies: ["src/db/orders.ts", "src/notifications/email.ts"],
+    invariants_touched: ["payment-idempotency"],
+    assumptions: [],
+    uncertainty_delta: "+1",
+    rationale: "Added retry queue for failed webhook deliveries.",
+    out_of_scope: true,
+    cross_scope_flag: false,
+    branch: "agent-2/stripe-retry-queue",
+    risk_signals: makeRiskSignals({ high_fan_in_module_modified: true, public_api_signature_changed: true }),
+    classification_verification: { agent_classification: "architectural", verifier_classification: "architectural", agreement: true, stage1_override: false },
+    dependency_scan: { undeclared_imports: [], stale_declared_deps: [], cross_scope_undeclared: [] },
+    agent_reasoning_summary: "",
+    status: "pending",
+    submitted_at: new Date(Date.now() - 45 * 60_000).toISOString(),
+  },
+  {
+    proposal_id: "p-003",
+    agent_id: "Agent-1",
+    path: "src/utils/dateHelpers.ts",
+    semantic_scope: "shared-utils",
+    scope_schema_version: "1.0",
+    change_type: "mechanical",
+    responsibilities: "Utility functions for date formatting.",
+    dependencies: [],
+    invariants_touched: [],
+    assumptions: [],
+    uncertainty_delta: "+0",
+    rationale: "Fixed a typo in a comment and ran prettier.",
+    out_of_scope: false,
+    cross_scope_flag: false,
+    branch: "agent-1/fix-typo",
+    risk_signals: makeRiskSignals({ mechanical_only: true }),
+    classification_verification: { agent_classification: "mechanical", verifier_classification: "mechanical", agreement: true, stage1_override: false },
+    dependency_scan: { undeclared_imports: [], stale_declared_deps: [], cross_scope_undeclared: [] },
+    agent_reasoning_summary: "",
+    status: "approved",
+    submitted_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+  },
+  {
+    proposal_id: "p-004",
+    agent_id: "Agent-3",
+    path: "src/data-access/userRepository.ts",
+    semantic_scope: "data-access",
+    scope_schema_version: "1.0",
+    change_type: "behavioral",
+    responsibilities: "Read/write user records from the database.",
+    dependencies: ["src/db/connection.ts"],
+    invariants_touched: ["user-pii-fields"],
+    assumptions: [],
+    uncertainty_delta: "+0",
+    rationale: "Added soft-delete support for GDPR compliance.",
+    out_of_scope: false,
+    cross_scope_flag: true,
+    branch: "agent-3/soft-delete",
+    risk_signals: makeRiskSignals({ invariant_referenced_file_modified: true }),
+    classification_verification: { agent_classification: "behavioral", verifier_classification: "behavioral", agreement: true, stage1_override: false },
+    dependency_scan: { undeclared_imports: [], stale_declared_deps: [], cross_scope_undeclared: ["src/auth/userContext.ts"] },
+    agent_reasoning_summary: "Soft-delete required adding a deleted_at column; touched auth context to filter deleted users from session checks.",
+    status: "rfc",
+    submitted_at: new Date(Date.now() - 25 * 60_000).toISOString(),
+    blocking_reasons: ["Cross-scope dependency on auth/userContext detected"],
+  } as QueueProposal & { blocking_reasons: string[] },
+  {
+    proposal_id: "p-005",
+    agent_id: "Agent-2",
+    path: "src/api/routes/healthCheck.ts",
+    semantic_scope: "api",
+    scope_schema_version: "1.0",
+    change_type: "mechanical",
+    responsibilities: "Serves the /health endpoint.",
+    dependencies: [],
+    invariants_touched: [],
+    assumptions: [],
+    uncertainty_delta: "+0",
+    rationale: "Updated version string in health response.",
+    out_of_scope: false,
+    cross_scope_flag: false,
+    branch: "agent-2/health-version",
+    risk_signals: makeRiskSignals({ mechanical_only: true }),
+    classification_verification: { agent_classification: "mechanical", verifier_classification: "mechanical", agreement: true, stage1_override: false },
+    dependency_scan: { undeclared_imports: [], stale_declared_deps: [], cross_scope_undeclared: [] },
+    agent_reasoning_summary: "",
+    status: "rejected",
+    submitted_at: new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString(),
+  },
+];
+
+const activityPhase0Html = generateActivityFeedHtml(mockProposals, [], "phase_0");
+writeFileSync(join(outDir, "test-activity-feed.html"), activityPhase0Html, "utf8");
+console.log(`Wrote: ${join(outDir, "test-activity-feed.html")}`);
+console.log(`  file://${join(outDir, "test-activity-feed.html")}`);
+
+const activityFullHtml = generateActivityFeedHtml(mockProposals, [], "full");
+writeFileSync(join(outDir, "test-activity-feed-full.html"), activityFullHtml, "utf8");
+console.log(`Wrote: ${join(outDir, "test-activity-feed-full.html")}`);
+console.log(`  file://${join(outDir, "test-activity-feed-full.html")}`);
+
+const activityEmptyHtml = generateActivityFeedHtml([], [], "phase_0");
+writeFileSync(join(outDir, "test-activity-feed-empty.html"), activityEmptyHtml, "utf8");
+console.log(`Wrote: ${join(outDir, "test-activity-feed-empty.html")}`);
+console.log(`  file://${join(outDir, "test-activity-feed-empty.html")}`);

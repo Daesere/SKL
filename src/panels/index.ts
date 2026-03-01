@@ -10,3 +10,4 @@ export { generateDigestHtml } from "./digestPanelHtml.js";
 export { generateRFCResolutionHtml } from "./rfcResolutionPanelHtml.js";
 export { generateTaskAssignmentHtml } from "./taskAssignmentPanelHtml.js";
 export { generateSetupWizardHtml } from "./setupWizardHtml.js";
+export { generateActivityFeedHtml, relativeTime } from "./activityFeedHtml.js";
