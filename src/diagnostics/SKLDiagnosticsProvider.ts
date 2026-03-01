@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { SKLFileSystem } from "../services/index.js";
+import { checkRFCDeadlines } from "../services/RFCService.js";
 import { SKLFileNotFoundError } from "../errors/index.js";
 import { KnowledgeFileSchema } from "../types/index.js";
 import type { KnowledgeFile, ScopeDefinition } from "../types/index.js";
@@ -109,6 +110,8 @@ export class SKLDiagnosticsProvider {
       ...await this.checkStaleWhitelist(knowledge),
     );
     knowledgeDiags.push(...this.checkReviewThreshold(knowledge));
+    knowledgeDiags.push(...await this.checkExpiredRFCDeadlines());
+    knowledgeDiags.push(...await this.checkOpenRFCs());
 
     // Publish
     if (knowledgeDiags.length > 0) {
@@ -429,6 +432,64 @@ export class SKLDiagnosticsProvider {
             FILE_START,
             `State entry '${entry.id}' has ${entry.change_count_since_review} changes since last review.`,
             vscode.DiagnosticSeverity.Information,
+          ),
+        );
+      }
+    }
+
+    return diags;
+  }
+
+  /**
+   * Check 9: Surface open RFCs whose human_response_deadline has passed.
+   * These are Error-severity — all agent work in the affected scope is
+   * paused until the RFC is resolved (Section 9.4).
+   */
+  private async checkExpiredRFCDeadlines(): Promise<vscode.Diagnostic[]> {
+    const expired = await checkRFCDeadlines(this.skl);
+    return expired.map(
+      (rfc) =>
+        new vscode.Diagnostic(
+          FILE_START,
+          `RFC ${rfc.id} response deadline has passed (${rfc.human_response_deadline}). ` +
+            `All agent work in the affected scope is paused until resolved.`,
+          vscode.DiagnosticSeverity.Error,
+        ),
+    );
+  }
+
+  /**
+   * Check 10: Surface open RFCs whose deadline has NOT yet passed as Warnings.
+   * These alert the operator that a decision is pending.
+   */
+  private async checkOpenRFCs(): Promise<vscode.Diagnostic[]> {
+    let ids: string[];
+    try {
+      ids = await this.skl.listRFCs();
+    } catch {
+      return [];
+    }
+
+    const now = new Date();
+    const diags: vscode.Diagnostic[] = [];
+
+    for (const id of ids) {
+      let rfc: import("../types/index.js").Rfc;
+      try {
+        rfc = await this.skl.readRFC(id);
+      } catch {
+        continue;
+      }
+      if (
+        rfc.status === "open" &&
+        rfc.human_response_deadline !== undefined &&
+        new Date(rfc.human_response_deadline) >= now
+      ) {
+        diags.push(
+          new vscode.Diagnostic(
+            FILE_START,
+            `RFC ${rfc.id} is open and awaiting human response. Deadline: ${rfc.human_response_deadline}.`,
+            vscode.DiagnosticSeverity.Warning,
           ),
         );
       }

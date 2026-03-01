@@ -1,11 +1,12 @@
 /**
- * Tests for RFCService — detectRFCTrigger (Tests 1-10) and generateRFC (Tests 11-14)
+ * Tests for RFCService — detectRFCTrigger (Tests 1-10), generateRFC (Tests 11-14),
+ * and checkRFCDeadlines (Tests 15-17)
  *
  * Run: npx tsx --require ./src/testing/register-vscode-mock.cjs src/services/__tests__/RFCService.test.ts
  * (vscode mock required for generateRFC tests)
  */
 
-import { detectRFCTrigger, generateRFC } from "../RFCService.js";
+import { detectRFCTrigger, generateRFC, checkRFCDeadlines } from "../RFCService.js";
 import {
   setSelectChatModels,
   resetLmMock,
@@ -450,6 +451,83 @@ await testAsync(
       throw new Error("Prompt missing forced option_a instruction");
     }
     resetLmMock();
+  },
+);
+
+// ---------------------------------------------------------------------------
+// checkRFCDeadlines tests (Tests 15–17)
+// ---------------------------------------------------------------------------
+
+console.log("\nRFCService.checkRFCDeadlines");
+console.log("=============================");
+
+/** Minimal valid RFC fixture. */
+function makeRfc(overrides: Partial<Rfc> = {}): Rfc {
+  const now = new Date();
+  return {
+    id: "RFC_001",
+    status: "open",
+    created_at: now.toISOString(),
+    triggering_proposal: "p-001",
+    decision_required: "Should we proceed?",
+    context: "Context for the decision.",
+    option_a: { description: "Approve", consequences: "Proceed." },
+    option_b: { description: "Reject", consequences: "Block." },
+    acceptance_criteria: [],
+    merge_blocked_until_criteria_pass: true,
+    human_response_deadline: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+    ...overrides,
+  };
+}
+
+/** Build a mock SKLFileSystem stub with a fixed RFC list. */
+function makeFsWithRFCs(rfcs: Rfc[]): Parameters<typeof checkRFCDeadlines>[0] {
+  return {
+    listRFCs: async () => rfcs.map((r) => r.id),
+    readRFC: async (id: string) => {
+      const found = rfcs.find((r) => r.id === id);
+      if (!found) throw new Error(`RFC ${id} not found`);
+      return found;
+    },
+  } as unknown as Parameters<typeof checkRFCDeadlines>[0];
+}
+
+// Test 15: open RFC with past deadline → returned
+await testAsync(
+  "Test 15 — checkRFCDeadlines: open RFC with past deadline is returned",
+  async () => {
+    const pastDeadline = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1 hour ago
+    const rfc = makeRfc({ id: "RFC_001", status: "open", human_response_deadline: pastDeadline });
+    const result = await checkRFCDeadlines(makeFsWithRFCs([rfc]));
+    if (result.length !== 1 || result[0].id !== "RFC_001") {
+      throw new Error(`Expected RFC_001 in result, got: ${JSON.stringify(result.map((r) => r.id))}`);
+    }
+  },
+);
+
+// Test 16: open RFC with future deadline → not returned
+await testAsync(
+  "Test 16 — checkRFCDeadlines: open RFC with future deadline is not returned",
+  async () => {
+    const futureDeadline = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour from now
+    const rfc = makeRfc({ id: "RFC_002", status: "open", human_response_deadline: futureDeadline });
+    const result = await checkRFCDeadlines(makeFsWithRFCs([rfc]));
+    if (result.length !== 0) {
+      throw new Error(`Expected empty result, got: ${JSON.stringify(result.map((r) => r.id))}`);
+    }
+  },
+);
+
+// Test 17: resolved RFC with past deadline → not returned
+await testAsync(
+  "Test 17 — checkRFCDeadlines: resolved RFC with past deadline is not returned",
+  async () => {
+    const pastDeadline = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1 hour ago
+    const rfc = makeRfc({ id: "RFC_003", status: "resolved", human_response_deadline: pastDeadline });
+    const result = await checkRFCDeadlines(makeFsWithRFCs([rfc]));
+    if (result.length !== 0) {
+      throw new Error(`Expected empty result for resolved RFC, got: ${JSON.stringify(result.map((r) => r.id))}`);
+    }
   },
 );
 

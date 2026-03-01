@@ -1,10 +1,13 @@
 /**
- * RFCService — RFC trigger detection and RFC generation (Section 9.1–9.2)
+ * RFCService — RFC trigger detection, generation, and deadline monitoring
+ *   (Section 9.1–9.2, 9.4)
  *
  * detectRFCTrigger: pure function — no I/O, no LLM calls.
  * generateRFC: LLM-backed function that builds an RFC from a proposal,
  *   validates the LLM output with Zod, retries once on failure,
  *   and atomically writes the result via SKLFileSystem.
+ * checkRFCDeadlines: reads all open RFCs and returns those whose
+ *   human_response_deadline has passed.
  *
  * Note: "invariant_ambiguity_resolution" is defined in RFCTriggerReason
  * but is NOT returned by detectRFCTrigger. It is set by the LLM decision
@@ -325,4 +328,45 @@ export async function generateRFC(
   // Step 5: Write and return
   await sklFileSystem.writeRFC(rfc);
   return rfc;
+}
+
+// ── RFC deadline monitoring (Section 9.4) ──────────────────────────────────
+
+/**
+ * Return all open RFCs whose human_response_deadline has passed.
+ *
+ * Never throws — silently skips any RFC that cannot be read.
+ * Call site should treat the result as an error-severity block:
+ * no new agent work may start in the affected scope until resolved.
+ */
+export async function checkRFCDeadlines(
+  sklFileSystem: SKLFileSystem,
+): Promise<Rfc[]> {
+  let ids: string[];
+  try {
+    ids = await sklFileSystem.listRFCs();
+  } catch {
+    return [];
+  }
+
+  const now = new Date();
+  const expired: Rfc[] = [];
+
+  for (const id of ids) {
+    let rfc: Rfc;
+    try {
+      rfc = await sklFileSystem.readRFC(id);
+    } catch {
+      continue; // skip unreadable / invalid RFC files
+    }
+    if (
+      rfc.status === "open" &&
+      rfc.human_response_deadline !== undefined &&
+      new Date(rfc.human_response_deadline) < now
+    ) {
+      expired.push(rfc);
+    }
+  }
+
+  return expired;
 }
