@@ -1,3 +1,5 @@
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
 import type { SKLFileSystem } from "./SKLFileSystem.js";
 import type {
@@ -38,6 +40,17 @@ import { VerifierService } from "./VerifierService.js";
 import type { OutputChannelLike } from "./VerifierService.js";
 
 /**
+ * Promisified execFile signature — injected so tests can mock git calls.
+ */
+export type ExecFileFn = (
+  file: string,
+  args: string[],
+  options: { cwd: string },
+) => Promise<{ stdout: string; stderr: string }>;
+
+const defaultExecFile = promisify(execFileCb) as ExecFileFn;
+
+/**
  * Minimal interface for the LLM verifier pass — satisfied by VerifierService
  * and by plain mock objects in tests.
  */
@@ -66,6 +79,7 @@ export class OrchestratorService {
   private readonly budget: SessionBudget;
   private readonly verifierService: VerifierServiceLike;
   private readonly outputChannel: OutputChannelLike;
+  private readonly execFileFn: ExecFileFn;
 
   /** Most recent session log from the prior session, or null. */
   private priorSessionLog: SessionLog | null = null;
@@ -76,12 +90,14 @@ export class OrchestratorService {
     budget: SessionBudget = DEFAULT_SESSION_BUDGET,
     verifierService?: VerifierServiceLike,
     outputChannel?: OutputChannelLike,
+    execFileFn?: ExecFileFn,
   ) {
     this.sklFileSystem = sklFileSystem;
     this.extensionContext = context;
     this.budget = budget;
     this.verifierService = verifierService ?? new VerifierService({ appendLine: () => {} });
     this.outputChannel = outputChannel ?? { appendLine: () => {} };
+    this.execFileFn = execFileFn ?? defaultExecFile;
   }
 
   // ── Session lifecycle ────────────────────────────────────────────
@@ -638,8 +654,35 @@ export class OrchestratorService {
 
   // TODO: implemented in substage 3.7
   async mergeBranch(
-    _branchName: string,
-  ): Promise<{ success: boolean; merge_conflict: boolean }> {
-    throw new Error("Not implemented — substage 3.7");
+    branch: string,
+    repoRoot: string,
+  ): Promise<{ success: boolean; conflict: boolean; error: string | null }> {
+    if (!branch) {
+      return { success: false, conflict: false, error: "No branch specified for merge" };
+    }
+
+    try {
+      await this.execFileFn("git", ["merge", "--no-ff", branch], { cwd: repoRoot });
+      return { success: true, conflict: false, error: null };
+    } catch (err: unknown) {
+      const stderr =
+        (err as { stderr?: string }).stderr ?? String(err);
+
+      if (stderr.toLowerCase().includes("conflict")) {
+        // Attempt abort to leave repo in a clean state
+        try {
+          await this.execFileFn("git", ["merge", "--abort"], { cwd: repoRoot });
+        } catch (abortErr: unknown) {
+          this.outputChannel.appendLine(
+            `[OrchestratorService] git merge --abort failed: ${
+              abortErr instanceof Error ? abortErr.message : String(abortErr)
+            }`,
+          );
+        }
+        return { success: false, conflict: true, error: stderr };
+      }
+
+      return { success: false, conflict: false, error: stderr };
+    }
   }
 }

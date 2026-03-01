@@ -10,7 +10,7 @@
  */
 
 import { OrchestratorService } from "../OrchestratorService.js";
-import type { VerifierServiceLike } from "../OrchestratorService.js";
+import type { VerifierServiceLike, ExecFileFn } from "../OrchestratorService.js";
 import type {
   QueueProposal,
   KnowledgeFile,
@@ -556,6 +556,130 @@ await testAsync(
     if (!result.rationale.includes("LLM unavailable for detailed rationale")) {
       throw new Error(`Expected fallback rationale, got: ${result.rationale}`);
     }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// mergeBranch tests (Tests 12–15)
+// ---------------------------------------------------------------------------
+
+console.log("\nOrchestratorService — mergeBranch");
+console.log("====================================");
+
+function makeExecFileFn(
+  impl: (file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>,
+): ExecFileFn & { calls: Array<{ file: string; args: string[] }> } {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fn = async (
+    file: string,
+    args: string[],
+  ): Promise<{ stdout: string; stderr: string }> => {
+    calls.push({ file, args });
+    return impl(file, args);
+  };
+  Object.defineProperty(fn, "calls", { get: () => calls });
+  return fn as unknown as ExecFileFn & { calls: typeof calls };
+}
+
+function makeService(execFileFn: ExecFileFn): OrchestratorService {
+  return new OrchestratorService(
+    MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET,
+    makeAgreementVerifier(), undefined, execFileFn,
+  );
+}
+
+// Test 12 — Exit code 0 → success: true
+await testAsync(
+  "Test 12 — mergeBranch: exit code 0 → success: true",
+  async () => {
+    const execFn = makeExecFileFn(async () => ({ stdout: "", stderr: "" }));
+    const service = makeService(execFn);
+    const result = await service.mergeBranch("feat/my-feature", "/repo");
+    assertEqual(result.success, true, "success");
+    assertEqual(result.conflict, false, "conflict");
+    assertEqual(result.error, null, "error");
+    if (execFn.calls.length !== 1) {
+      throw new Error(`Expected 1 git call, got ${execFn.calls.length}`);
+    }
+    const args = execFn.calls[0]!.args;
+    if (!args.includes("--no-ff")) throw new Error("--no-ff flag must be present");
+    if (!args.includes("feat/my-feature")) throw new Error("branch must be in args");
+  },
+);
+
+// Test 13 — Exit code 1, stderr contains CONFLICT → conflict: true, abort called
+await testAsync(
+  "Test 13 — mergeBranch: stderr contains CONFLICT → conflict: true, --abort called",
+  async () => {
+    const execFn = makeExecFileFn(async (_file, args) => {
+      if (args.includes("merge") && args.includes("--no-ff")) {
+        const err = Object.assign(new Error("merge failed"), {
+          stderr: "Auto-merging src/auth.py\nCONFLICT (content): Merge conflict in src/auth.py",
+        });
+        throw err;
+      }
+      // --abort call succeeds
+      return { stdout: "", stderr: "" };
+    });
+    const service = makeService(execFn);
+    const result = await service.mergeBranch("feat/conflict-branch", "/repo");
+    assertEqual(result.success, false, "success");
+    assertEqual(result.conflict, true, "conflict");
+    if (result.error === null || !result.error.includes("CONFLICT")) {
+      throw new Error(`error should contain CONFLICT, got: ${result.error}`);
+    }
+    // Two calls: merge, then abort
+    if (execFn.calls.length !== 2) {
+      throw new Error(`Expected 2 git calls (merge + abort), got ${execFn.calls.length}`);
+    }
+    const abortCall = execFn.calls[1]!;
+    if (!abortCall.args.includes("--abort")) {
+      throw new Error("Second call should be git merge --abort");
+    }
+  },
+);
+
+// Test 14 — Exit code 1, no CONFLICT in stderr → success: false, conflict: false
+await testAsync(
+  "Test 14 — mergeBranch: non-zero exit without CONFLICT → success: false, no abort",
+  async () => {
+    const execFn = makeExecFileFn(async () => {
+      const err = Object.assign(new Error("invalid ref"), {
+        stderr: "fatal: 'feat/nonexistent' does not appear to be a git repository",
+      });
+      throw err;
+    });
+    const service = makeService(execFn);
+    const result = await service.mergeBranch("feat/nonexistent", "/repo");
+    assertEqual(result.success, false, "success");
+    assertEqual(result.conflict, false, "conflict");
+    if (result.error === null || result.error.length === 0) {
+      throw new Error("error should be populated");
+    }
+    // Only one call — no --abort
+    if (execFn.calls.length !== 1) {
+      throw new Error(`Expected 1 git call, got ${execFn.calls.length}`);
+    }
+  },
+);
+
+// Test 15 — Empty branch → error immediately, no git call
+await testAsync(
+  "Test 15 — mergeBranch: empty branch string → error, no git call",
+  async () => {
+    let gitCalled = false;
+    const execFn = makeExecFileFn(async () => {
+      gitCalled = true;
+      return { stdout: "", stderr: "" };
+    });
+    const service = makeService(execFn);
+    const result = await service.mergeBranch("", "/repo");
+    assertEqual(result.success, false, "success");
+    assertEqual(result.conflict, false, "conflict");
+    if (result.error !== "No branch specified for merge") {
+      throw new Error(`Unexpected error: ${result.error}`);
+    }
+    if (gitCalled) throw new Error("git must not be called for empty branch");
   },
 );
 
