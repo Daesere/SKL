@@ -19,7 +19,9 @@ import {
   generateProgressUpdate,
 } from "./orchestratorPanelHtml.js";
 import { generateDigestHtml } from "./digestPanelHtml.js";
+import { generateQueueHtml, generateHeatmapSection } from "./queuePanelHtml.js";
 import type { DigestReport } from "../services/DigestService.js";
+import type { StateRecord } from "../types/index.js";
 
 const outDir = join(tmpdir(), "skl-panel-test");
 mkdirSync(outDir, { recursive: true });
@@ -250,3 +252,118 @@ const digestHtml = generateDigestHtml(mockDigestReport);
 writeFileSync(join(outDir, "test-digest.html"), digestHtml, "utf8");
 console.log(`Wrote: ${join(outDir, "test-digest.html")}`);
 console.log(`  file://${join(outDir, "test-digest.html")}`);
+
+// ── 5. Queue panel with heatmap ────────────────────────────────
+
+const mockStateRecords: StateRecord[] = [
+  {
+    id: "auth_token_manager",
+    path: "src/auth/TokenManager.ts",
+    semantic_scope: "auth",
+    scope_schema_version: "1.0",
+    responsibilities: "JWT management",
+    dependencies: [],
+    invariants_touched: [],
+    assumptions: [],
+    owner: "agent-alpha",
+    version: 3,
+    uncertainty_level: 2,
+    change_count_since_review: 7,
+  },
+  {
+    id: "api_rate_limiter",
+    path: "src/api/RateLimiter.ts",
+    semantic_scope: "api",
+    scope_schema_version: "1.0",
+    responsibilities: "Rate limiting",
+    dependencies: [],
+    invariants_touched: [],
+    assumptions: [],
+    owner: "agent-beta",
+    version: 1,
+    uncertainty_level: 1,
+    change_count_since_review: 3,
+  },
+  {
+    id: "data_query_builder",
+    path: "src/data/QueryBuilder.ts",
+    semantic_scope: "data",
+    scope_schema_version: "1.0",
+    responsibilities: "SQL query construction",
+    dependencies: [],
+    invariants_touched: [],
+    assumptions: [],
+    owner: "agent-gamma",
+    version: 8,
+    uncertainty_level: 1,
+    change_count_since_review: 6,
+  },
+  {
+    id: "infra_deploy_config",
+    path: "infra/deploy.yaml",
+    semantic_scope: "infra",
+    scope_schema_version: "1.0",
+    responsibilities: "K8s deploy config",
+    dependencies: [],
+    invariants_touched: [],
+    assumptions: [],
+    owner: "agent-delta",
+    version: 2,
+    uncertainty_level: 3,
+    change_count_since_review: 1,
+  },
+  {
+    id: "ui_dashboard",
+    path: "src/ui/Dashboard.tsx",
+    semantic_scope: "ui",
+    scope_schema_version: "1.0",
+    responsibilities: "Main dashboard",
+    dependencies: [],
+    invariants_touched: [],
+    assumptions: [],
+    owner: "agent-epsilon",
+    version: 4,
+    uncertainty_level: 1,
+    change_count_since_review: 4,
+  },
+];
+
+const queueWithHeatmapHtml = generateQueueHtml([], mockStateRecords, true);
+writeFileSync(join(outDir, "test-queue-heatmap.html"), queueWithHeatmapHtml, "utf8");
+console.log(`Wrote: ${join(outDir, "test-queue-heatmap.html")}`);
+console.log(`  file://${join(outDir, "test-queue-heatmap.html")}`);
+
+// ── 6. generateHeatmapSection — zero-change guard ─────────────
+
+const zeroRecords: StateRecord[] = mockStateRecords.map((r) => ({
+  ...r,
+  change_count_since_review: 0,
+}));
+const zeroHtml = generateHeatmapSection(zeroRecords, 5);
+if (!zeroHtml.includes("No modules have unreviewed changes")) {
+  throw new Error("FAIL: zero-change guard — expected 'No modules have unreviewed changes' in output");
+}
+console.log("PASS: zero-change guard");
+
+// ── 7. generateHeatmapSection — 20 records → only 15 shown ────
+
+const twentyRecords: StateRecord[] = Array.from({ length: 20 }, (_, i) => ({
+  id: `module_${i}`,
+  path: `src/module_${i}.ts`,
+  semantic_scope: "core",
+  scope_schema_version: "1.0",
+  responsibilities: `Module ${i}`,
+  dependencies: [],
+  invariants_touched: [],
+  assumptions: [],
+  owner: "agent-x",
+  version: 1,
+  uncertainty_level: 1,
+  change_count_since_review: i + 1,
+}));
+const twentyHtml = generateHeatmapSection(twentyRecords, 5);
+const rowCount = (twentyHtml.match(/class="heatmap-row"/g) ?? []).length;
+if (rowCount !== 15) {
+  throw new Error(`FAIL: top-15 cap — expected 15 heatmap-row divs, got ${rowCount}`);
+}
+console.log(`PASS: top-15 cap (${rowCount} rows rendered for 20 input records)`);

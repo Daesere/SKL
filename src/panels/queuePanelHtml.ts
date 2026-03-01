@@ -5,6 +5,9 @@
  * complete HTML document strings with inline CSS only.
  */
 
+import type { StateRecord } from "../types/index.js";
+import { REVIEW_THRESHOLD } from "../services/DigestService.js";
+
 /**
  * Minimal proposal shape consumed by the HTML renderer.
  *
@@ -124,10 +127,65 @@ function renderCard(p: ProposalView): string {
 }
 
 /**
- * Generate a full HTML document for the Queue webview panel.
+ * Generate the change heatmap section HTML.
+ *
+ * Shows up to 15 state records sorted by change_count_since_review descending.
+ * Records with zero changes are excluded.
+ *
+ * @param stateRecords   All state records to consider.
+ * @param reviewThreshold The threshold above which a record is "over threshold".
  */
-export function generateQueueHtml(proposals: ProposalView[]): string {
-  if (proposals.length === 0) {
+export function generateHeatmapSection(
+  stateRecords: StateRecord[],
+  reviewThreshold: number,
+): string {
+  const withChanges = stateRecords.filter((r) => r.change_count_since_review > 0);
+  if (withChanges.length === 0) {
+    return `<section class="heatmap"><h2>Module Change Heatmap</h2><p>No modules have unreviewed changes.</p></section>`;
+  }
+  const top15 = withChanges
+    .slice()
+    .sort((a, b) => b.change_count_since_review - a.change_count_since_review)
+    .slice(0, 15);
+
+  const rows = top15.map((record) => {
+    const barPct = Math.min((record.change_count_since_review / reviewThreshold) * 100, 100);
+    const overThreshold = record.change_count_since_review >= reviewThreshold;
+    const overflowPct = overThreshold
+      ? Math.min(((record.change_count_since_review - reviewThreshold) / reviewThreshold) * 50, 50)
+      : 0;
+    const overflowDiv = overThreshold
+      ? `<div class="heatmap-overflow" style="width: ${overflowPct}%"></div>`
+      : "";
+    return `<div class="heatmap-row">
+  <span class="heatmap-id">${escapeHtml(record.id)}</span>
+  <code class="heatmap-path">${escapeHtml(record.path)}</code>
+  <span class="heatmap-scope">${escapeHtml(record.semantic_scope)}</span>
+  <span class="uncertainty-badge u${record.uncertainty_level}">U${record.uncertainty_level}</span>
+  <div class="heatmap-bar-container">
+    <div class="heatmap-bar ${overThreshold ? "over-threshold" : ""}" style="width: ${barPct}%"></div>
+    ${overflowDiv}
+  </div>
+  <span class="heatmap-count">${record.change_count_since_review}</span>
+</div>`;
+  }).join("\n");
+
+  return `<section class="heatmap"><h2>Module Change Heatmap</h2>${rows}</section>`;
+}
+
+/**
+ * Generate a full HTML document for the Queue webview panel.
+ *
+ * @param proposals   Proposal list to render.
+ * @param stateRecords State records for the heatmap (defaults to empty).
+ * @param showHeatmap  Whether to append the heatmap section (defaults to false).
+ */
+export function generateQueueHtml(
+  proposals: ProposalView[],
+  stateRecords: StateRecord[] = [],
+  showHeatmap: boolean = false,
+): string {
+  if (proposals.length === 0 && !showHeatmap) {
     return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -137,6 +195,7 @@ export function generateQueueHtml(proposals: ProposalView[]): string {
   <div style="text-align:center;opacity:0.6;">
     <p style="font-size:1.2em;">Queue is empty. No pending proposals.</p>
   </div>
+<script>const vscode = acquireVsCodeApi();</script>
 </body>
 </html>`;
   }
@@ -144,6 +203,8 @@ export function generateQueueHtml(proposals: ProposalView[]): string {
   const cards = proposals.map(renderCard).join("\n");
   const pending = proposals.filter((p) => p.status === "pending").length;
   const total = proposals.length;
+  const heatmapHtml = showHeatmap ? generateHeatmapSection(stateRecords, REVIEW_THRESHOLD) : "";
+  const toggleLabel = showHeatmap ? "Hide Heatmap" : "Show Heatmap";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -151,11 +212,35 @@ export function generateQueueHtml(proposals: ProposalView[]): string {
 <style>
   body { margin:0; padding:16px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#1e1e1e; color:#ccc; }
   h2 { margin:0 0 12px; color:#e0e0e0; font-weight:500; }
+  .header-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+  button { background:#0e639c; color:#fff; border:none; padding:4px 10px; border-radius:3px; cursor:pointer; font-size:0.85em; }
+  button:hover { opacity:0.85; }
+  .heatmap { margin-top:24px; }
+  .heatmap h2 { color:#e0e0e0; font-weight:500; margin-bottom:10px; }
+  .heatmap-row { display:flex; align-items:center; gap:8px; margin:5px 0; font-size:0.88em; }
+  .heatmap-id { min-width:160px; color:#4fc1ff; }
+  .heatmap-path { color:#ccc; font-size:0.85em; }
+  .heatmap-scope { color:#888; font-size:0.82em; min-width:60px; }
+  .heatmap-bar-container { display:flex; align-items:center; width:200px; background:#2d2d2d; border-radius:4px; height:8px; overflow:hidden; }
+  .heatmap-bar { height:8px; border-radius:4px; background:#4caf50; transition:width 0.3s; }
+  .heatmap-bar.over-threshold { background:#f0a030; }
+  .heatmap-overflow { height:8px; display:inline-block; border-radius:0 4px 4px 0; background:#e04040; }
+  .heatmap-count { color:#aaa; min-width:24px; text-align:right; }
+  .uncertainty-badge { display:inline-block; padding:1px 5px; border-radius:10px; font-size:0.78em; font-weight:600; color:#fff; }
+  .uncertainty-badge.u0 { background:#555; }
+  .uncertainty-badge.u1 { background:#4caf50; }
+  .uncertainty-badge.u2 { background:#f0a030; }
+  .uncertainty-badge.u3 { background:#e04040; }
 </style>
 </head>
 <body>
-  <h2>SKL Queue — ${pending} pending / ${total} total</h2>
+  <div class="header-row">
+    <h2>SKL Queue — ${pending} pending / ${total} total</h2>
+    <button onclick="vscode.postMessage({command:'toggle_heatmap'})">${toggleLabel}</button>
+  </div>
   ${cards}
+  ${heatmapHtml}
+<script>const vscode = acquireVsCodeApi();</script>
 </body>
 </html>`;
 }

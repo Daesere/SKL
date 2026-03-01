@@ -20,6 +20,7 @@ export class QueuePanel {
   private readonly _skl: SKLFileSystem;
   private readonly _disposables: vscode.Disposable[] = [];
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  private _showHeatmap: boolean = false;
 
   // ── Factory ──────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ export class QueuePanel {
       VIEW_TYPE,
       PANEL_TITLE,
       vscode.ViewColumn.Beside,
-      { enableScripts: false },
+      { enableScripts: true },
     );
 
     QueuePanel._instance = new QueuePanel(panel, sklFileSystem);
@@ -63,6 +64,18 @@ export class QueuePanel {
       this.debouncedRender();
     });
     this._disposables.push(knowledgeSub);
+
+    // Message handler for webview → extension messages
+    this._panel.webview.onDidReceiveMessage(
+      (message: { command: string }) => {
+        if (message.command === "toggle_heatmap") {
+          this._showHeatmap = !this._showHeatmap;
+          void this.render();
+        }
+      },
+      undefined,
+      this._disposables,
+    );
 
     // Reveal panel when operator opens knowledge.json
     const editorSub = vscode.window.onDidChangeActiveTextEditor(
@@ -89,9 +102,10 @@ export class QueuePanel {
     try {
       const knowledge = await this._skl.readKnowledge();
       const proposals = knowledge.queue ?? [];
-      this._panel.webview.html = generateQueueHtml(proposals);
+      const stateRecords = knowledge.state ?? [];
+      this._panel.webview.html = generateQueueHtml(proposals, stateRecords, this._showHeatmap);
     } catch {
-      this._panel.webview.html = generateQueueHtml([]);
+      this._panel.webview.html = generateQueueHtml([], [], this._showHeatmap);
     }
   }
 
