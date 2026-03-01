@@ -32,6 +32,7 @@ export class TaskAssignmentPanel {
     sklFileSystem: SKLFileSystem,
     orchestratorService: OrchestratorService,
     scopeDefinitions: ScopeDefinition,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _context: vscode.ExtensionContext,
   ): TaskAssignmentPanel {
     if (TaskAssignmentPanel._instance) {

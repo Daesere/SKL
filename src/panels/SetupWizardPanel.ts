@@ -86,7 +86,8 @@ export class SetupWizardPanel {
     panel: vscode.WebviewPanel,
     skl: SKLFileSystem,
     hookInstaller: HookInstaller,
-    _context: vscode.ExtensionContext,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    __context: vscode.ExtensionContext,
   ) {
     this._panel = panel;
     this._skl = skl;

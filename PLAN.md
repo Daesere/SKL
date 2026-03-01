@@ -119,6 +119,35 @@ ADR promotion. uncertainty_level reduction via passing tests.
 
 ---
 
+## Stage 5 — Developer Experience Layer ✅
+
+**Goal:** Human-facing panels that replace raw JSON documents — Digest panel,
+RFC Resolution panel, Task Assignment Review panel, and first-run Setup Wizard.
+Every interaction starts from a well-reasoned draft rather than a blank input.
+
+### Substages
+- 5.1 Digest panel rendering and scope filter
+- 5.2 RFC Resolution panel with option ranking and acceptance criteria
+- 5.3 Task Assignment Review panel replacing untitled JSON document
+- 5.4 First-run Setup Wizard (5-step state machine, auto-trigger)
+- 5.5 Final wiring: package.json commands, panel barrel exports
+
+### Completion Criteria
+- Digest panel opens via skl.reviewDigest and shows entries sorted by priority_score
+- RFC Resolution panel opens for any open RFC; recommended option has star badge
+- Wizardconfirm_resolution writes ADR and closes panel; cancel does not write
+- Task Assignment Review panel opens from Orchestrator; assignments are editable
+- apply_assignment writes AgentContext with file_scope as string[]
+- applyAllAssignments is sequential to avoid write races
+- Setup Wizard auto-triggers when .skl/knowledge.json absent + wizardShown not set
+- Step 3 reuses SYSTEM_PROMPT from generateScopeDefinitions.ts exactly
+- Step 5 writes AgentContext; skip shows warning and closes wizard
+- skl.reviewDigest, skl.runCICheck, skl.openSetupWizard reachable via Command Palette
+- All Stage 5 panels and HTML generators exported from panels/index.ts
+- npm run lint clean, TypeScript compiles under strict mode
+
+---
+
 ## Stage 6 — Phase 0 Mode and Adoption Tooling ⏳
 
 **Goal:** Lower the onboarding barrier by introducing Phase 0 — a reduced-
@@ -153,13 +182,14 @@ is unchanged. Every change in this stage is additive.
 
 ## Implementation Complete
 
-All four stages of the SKL v1.4 reference specification are implemented.
-The system guarantees that coordination-relevant uncertainty, assumptions,
-and cross-scope dependencies cannot propagate implicitly. It does not
-promise correctness. It ensures that when things go wrong, they do so
-locally, transparently, and with bounded blast radius.
+All four stages of the SKL v1.4 reference specification plus the Stage 5
+developer experience layer are implemented. The system guarantees that
+coordination-relevant uncertainty, assumptions, and cross-scope dependencies
+cannot propagate implicitly. The developer experience layer ensures that every
+human-facing decision point starts from a well-reasoned draft rather than a
+blank input box.
 
-For extension work beyond v1.4, see SPEC.md Section 12 (Operational
+For extension work beyond v1.5, see SPEC.md Section 12 (Operational
 Limits) for the constraints any extension must respect.
 
 ---

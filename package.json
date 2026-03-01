@@ -51,6 +51,18 @@
       {
         "command": "skl.openOrchestratorPanel",
         "title": "SKL: Open Orchestrator Panel"
+      },
+      {
+        "command": "skl.reviewDigest",
+        "title": "SKL: Review Digest"
+      },
+      {
+        "command": "skl.runCICheck",
+        "title": "SKL: Run CI Check"
+      },
+      {
+        "command": "skl.openSetupWizard",
+        "title": "SKL: Open Setup Wizard"
       }
     ],
     "menus": {

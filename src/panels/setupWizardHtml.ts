@@ -131,7 +131,7 @@ function renderStep3(state: WizardState): string {
   if (status === "done" && state.generatedScopes && state.generatedScopes.length > 0) {
     const cards = state.generatedScopes
       .map(
-        (s, i) => `<div class="scope-card">
+        (s) => `<div class="scope-card">
   <label>Scope name <input class="scope-name" type="text" value="${escAttr(s.name)}"></label>
   <label>Description <textarea class="scope-desc">${escHtml(s.description)}</textarea></label>
   <label>Allowed path prefixes (one per line) <textarea class="scope-allowed">${escHtml(s.allowed_path_prefixes.join("\n"))}</textarea></label>
@@ -139,9 +139,6 @@ function renderStep3(state: WizardState): string {
 </div>`,
       )
       .join("\n");
-
-    // index only used for card count, kept for future use
-    void (state.generatedScopes.length);
 
     return `<h2>Review Generated Scopes</h2>
 ${cards}
