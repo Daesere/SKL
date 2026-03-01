@@ -55,6 +55,7 @@ export default tseslint.config(
       "src/services/SKLFileSystem.ts",
       "src/services/HookInstaller.ts", // operates on .git/hooks/, not .skl/
       "src/services/ConflictDetectionService.ts", // needs path.normalize for path comparison
+      "src/services/StateWriterService.ts", // needs path.normalize for deriveStateId
       "src/test-filesystem.ts", // legitimately needs direct fs for integration tests
       "src/testing/**",
       "src/utils/**",            // utils may use path (see next config)

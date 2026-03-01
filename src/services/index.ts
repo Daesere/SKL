@@ -3,6 +3,7 @@ export { HookInstaller } from "./HookInstaller.js";
 export { OrchestratorService } from "./OrchestratorService.js";
 export { VerifierService } from "./VerifierService.js";
 export { detectRFCTrigger, generateRFC, checkRFCDeadlines } from "./RFCService.js";
+export { deriveStateId, createStateEntry, updateStateEntry } from "./StateWriterService.js";
 export {
   detectStateConflict,
   isUncertaintyLevel3,
