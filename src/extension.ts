@@ -300,6 +300,7 @@ export function activate(context: vscode.ExtensionContext): void {
               context.extensionUri,
               orchestratorService,
               skl,
+              context,
             );
           }),
 

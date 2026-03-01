@@ -11,6 +11,7 @@ import * as vscode from "vscode";
 import type { SKLFileSystem, OrchestratorService } from "../services/index.js";
 import type { ProposalReviewResult, DecisionType } from "../types/index.js";
 import { generateOrchestratorHtml } from "./orchestratorPanelHtml.js";
+import { TaskAssignmentPanel } from "./TaskAssignmentPanel.js";
 
 const VIEW_TYPE = "sklOrchestratorPanel";
 const PANEL_TITLE = "SKL Orchestrator";
@@ -37,6 +38,7 @@ export class OrchestratorPanel {
   private readonly _panel: vscode.WebviewPanel;
   private readonly _skl: SKLFileSystem;
   private readonly _orchestratorService: OrchestratorService;
+  private readonly _context: vscode.ExtensionContext;
   private readonly _disposables: vscode.Disposable[] = [];
 
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -51,6 +53,7 @@ export class OrchestratorPanel {
     extensionUri: vscode.Uri,
     orchestratorService: OrchestratorService,
     sklFileSystem: SKLFileSystem,
+    context: vscode.ExtensionContext,
   ): OrchestratorPanel {
     // Suppress unused parameter lint — extensionUri reserved for future
     // local resource roots (icons, stylesheets).
@@ -75,6 +78,7 @@ export class OrchestratorPanel {
       panel,
       orchestratorService,
       sklFileSystem,
+      context,
     );
     return OrchestratorPanel._instance;
   }
@@ -85,10 +89,12 @@ export class OrchestratorPanel {
     panel: vscode.WebviewPanel,
     orchestratorService: OrchestratorService,
     skl: SKLFileSystem,
+    context: vscode.ExtensionContext,
   ) {
     this._panel = panel;
     this._orchestratorService = orchestratorService;
     this._skl = skl;
+    this._context = context;
 
     // Show start screen immediately
     this._panel.webview.html = generateOrchestratorHtml(null, [], "", []);
@@ -148,13 +154,13 @@ export class OrchestratorPanel {
 
         const assignments =
           await this._orchestratorService.runTaskAssignment(featureRequest);
-        const doc = await vscode.workspace.openTextDocument({
-          content: JSON.stringify(assignments, null, 2),
-          language: "json",
-        });
-        await vscode.window.showTextDocument(doc);
-        void vscode.window.showInformationMessage(
-          "Review the task assignments above. Use 'SKL: Configure Agent' to apply them.",
+        const scopeDefs = await this._skl.readScopeDefinitions();
+        TaskAssignmentPanel.createOrShow(
+          assignments,
+          this._skl,
+          this._orchestratorService,
+          scopeDefs,
+          this._context,
         );
         break;
       }
