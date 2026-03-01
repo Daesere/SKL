@@ -54,10 +54,88 @@ function __resetLmMock() {
   _selectChatModelsImpl = async () => [];
 }
 
+/* ── Webview panel mock ───────────────────────────────────────────── */
+
+class MockWebviewPanel {
+  constructor() {
+    this._html = '';
+    this._messageListeners = [];
+    this._disposeListeners = [];
+    const self = this;
+    this.webview = {
+      get html() { return self._html; },
+      set html(v) { self._html = v; },
+      postMessage: async () => true,
+      onDidReceiveMessage: (handler) => {
+        self._messageListeners.push(handler);
+        return { dispose: () => {} };
+      },
+    };
+  }
+  reveal() {}
+  onDidDispose(handler) {
+    this._disposeListeners.push(handler);
+    return { dispose: () => {} };
+  }
+  dispose() {
+    for (const h of this._disposeListeners) h();
+  }
+  /** Test helper: simulate an incoming message from the webview. */
+  simulateMessage(msg) {
+    for (const h of this._messageListeners) h(msg);
+  }
+}
+
+/* ── Window mock ─────────────────────────────────────────────────── */
+
+const window = {
+  createWebviewPanel: () => new MockWebviewPanel(),
+  showErrorMessage: async () => undefined,
+  showInformationMessage: async () => undefined,
+  showWarningMessage: async () => undefined,
+  showInputBox: async () => undefined,
+  showQuickPick: async () => undefined,
+  onDidChangeActiveTextEditor: () => ({ dispose: () => {} }),
+  createOutputChannel: () => ({
+    appendLine: () => {},
+    show: () => {},
+    dispose: () => {},
+  }),
+};
+
+const ViewColumn = { One: 1, Two: 2, Three: 3, Beside: -2 };
+
+const Uri = {
+  file: (p) => ({ fsPath: p, scheme: 'file', path: p }),
+  joinPath: (...args) => ({ fsPath: args.map(a => a.fsPath || a).join('/'), scheme: 'file' }),
+};
+
+const commands = {
+  executeCommand: async () => undefined,
+};
+
+const workspace = {
+  createFileSystemWatcher: () => ({
+    onDidCreate: () => ({ dispose: () => {} }),
+    onDidChange: () => ({ dispose: () => {} }),
+    onDidDelete: () => ({ dispose: () => {} }),
+    dispose: () => {},
+  }),
+  fs: {
+    readFile: async () => new Uint8Array(),
+  },
+};
+
 module.exports = {
   EventEmitter,
   lm,
   LanguageModelChatMessage,
   __setSelectChatModels,
   __resetLmMock,
+  window,
+  ViewColumn,
+  Uri,
+  commands,
+  workspace,
+  MockWebviewPanel,
 };
