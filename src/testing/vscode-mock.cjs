@@ -26,4 +26,38 @@ class EventEmitter {
   }
 }
 
-module.exports = { EventEmitter };
+/* ── LM mock infrastructure ──────────────────────────────────────── */
+
+/** @type {Function} */
+let _selectChatModelsImpl = async () => [];
+
+const lm = {
+  selectChatModels: async function (...args) {
+    return _selectChatModelsImpl(...args);
+  },
+};
+
+const LanguageModelChatMessage = {
+  User: (content) => ({ role: "user", content }),
+};
+
+/**
+ * Replace the selectChatModels implementation for a test.
+ * @param {Function} impl
+ */
+function __setSelectChatModels(impl) {
+  _selectChatModelsImpl = impl;
+}
+
+/** Reset LM mock to default (no models available). */
+function __resetLmMock() {
+  _selectChatModelsImpl = async () => [];
+}
+
+module.exports = {
+  EventEmitter,
+  lm,
+  LanguageModelChatMessage,
+  __setSelectChatModels,
+  __resetLmMock,
+};

@@ -111,3 +111,12 @@ export const ClassificationResultSchema = z.object({
   override_reason: z.string().nullable(),
 });
 export type ClassificationResult = z.infer<typeof ClassificationResultSchema>;
+
+// VerifierResult (Section 6.2)
+export const VerifierResultSchema = z.object({
+  verifier_classification: ChangeTypeSchema,
+  justification: z.string(),
+  agreement: z.boolean(),
+  resolved_classification: ChangeTypeSchema,
+});
+export type VerifierResult = z.infer<typeof VerifierResultSchema>;
