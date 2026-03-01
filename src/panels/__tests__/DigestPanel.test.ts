@@ -123,6 +123,7 @@ function makeMockFs(options: {
     writeKnowledge: async (k: KnowledgeFile) => { options.writeCapture?.push(k); },
     listRFCs: async () => [],
     readRFC: async () => { throw new Error("no RFC"); },
+    readMostRecentSessionLog: async () => null,
     onKnowledgeChanged: () => ({ dispose: () => {} }),
   } as unknown as SKLFileSystem;
 }
@@ -131,6 +132,7 @@ function makeMockFs(options: {
 type DigestPanelInternal = {
   markReviewed: (id: string) => Promise<void>;
   markAllReviewed: () => Promise<void>;
+  markSelectedReviewed: (ids: string[]) => Promise<void>;
   currentKnowledge: KnowledgeFile;
 };
 
@@ -278,6 +280,96 @@ await testAsync("Test 7 — Input KnowledgeFile is not mutated by markReviewed o
   // Original KnowledgeFile should be unmutated
   assertEqual(originalKnowledge.state[0].uncertainty_level, 2, "original state[0] not mutated");
   assertEqual(originalKnowledge.state[1].uncertainty_level, 2, "original state[1] not mutated");
+  assertEqual(originalKnowledge.state[0].change_count_since_review, 3, "original change_count not mutated");
+});
+
+// ---------------------------------------------------------------------------
+// markSelectedReviewed tests
+// ---------------------------------------------------------------------------
+
+console.log("\nDigestPanel — markSelectedReviewed");
+console.log("====================================");
+
+await testAsync("Test 8 — markSelectedReviewed with level-2, level-0, level-3 IDs → only level-2 updated, writeKnowledge called once", async () => {
+  const records = [
+    makeStateRecord({ id: "l2", uncertainty_level: 2, change_count_since_review: 3 }),
+    makeStateRecord({ id: "l0", uncertainty_level: 0, change_count_since_review: 0 }),
+    makeStateRecord({ id: "l3", uncertainty_level: 3, change_count_since_review: 1 }),
+  ];
+  const knowledge = makeKnowledge(records);
+  const writeCapture: KnowledgeFile[] = [];
+  const panel = new DigestPanel(makeMockPanel(), makeMockFs({ knowledge, writeCapture }), makeOutputChannel(), knowledge);
+
+  await internal(panel).markSelectedReviewed(["l2", "l0", "l3"]);
+
+  assertEqual(writeCapture.length, 1, "writeKnowledge call count");
+  const written = writeCapture[0];
+  const l2 = written.state.find((r) => r.id === "l2");
+  const l0 = written.state.find((r) => r.id === "l0");
+  const l3 = written.state.find((r) => r.id === "l3");
+  if (!l2) throw new Error("l2 record missing");
+  if (!l0) throw new Error("l0 record missing");
+  if (!l3) throw new Error("l3 record missing");
+  assertEqual(l2.uncertainty_level, 1, "l2 updated to 1");
+  assertEqual(l0.uncertainty_level, 0, "l0 unchanged");
+  assertEqual(l3.uncertainty_level, 3, "l3 unchanged");
+});
+
+await testAsync("Test 9 — markSelectedReviewed with all level-1 IDs → writeKnowledge not called", async () => {
+  const records = [
+    makeStateRecord({ id: "r1", uncertainty_level: 1 }),
+    makeStateRecord({ id: "r2", uncertainty_level: 1 }),
+  ];
+  const knowledge = makeKnowledge(records);
+  const writeCapture: KnowledgeFile[] = [];
+  const panel = new DigestPanel(makeMockPanel(), makeMockFs({ knowledge, writeCapture }), makeOutputChannel(), knowledge);
+
+  await internal(panel).markSelectedReviewed(["r1", "r2"]);
+
+  assertEqual(writeCapture.length, 0, "writeKnowledge should not be called");
+});
+
+await testAsync("Test 10 — markSelectedReviewed with non-existent ID → silent skip, no error", async () => {
+  const knowledge = makeKnowledge([]);
+  const writeCapture: KnowledgeFile[] = [];
+  const panel = new DigestPanel(makeMockPanel(), makeMockFs({ knowledge, writeCapture }), makeOutputChannel(), knowledge);
+
+  // Should not throw
+  await internal(panel).markSelectedReviewed(["does_not_exist"]);
+
+  assertEqual(writeCapture.length, 0, "writeKnowledge should not be called");
+});
+
+await testAsync("Test 11 — markSelectedReviewed with 3 level-2 records → all updated, writeKnowledge called once", async () => {
+  const records = [
+    makeStateRecord({ id: "a", uncertainty_level: 2, change_count_since_review: 2 }),
+    makeStateRecord({ id: "b", uncertainty_level: 2, change_count_since_review: 4 }),
+    makeStateRecord({ id: "c", uncertainty_level: 2, change_count_since_review: 1 }),
+  ];
+  const knowledge = makeKnowledge(records);
+  const writeCapture: KnowledgeFile[] = [];
+  const panel = new DigestPanel(makeMockPanel(), makeMockFs({ knowledge, writeCapture }), makeOutputChannel(), knowledge);
+
+  await internal(panel).markSelectedReviewed(["a", "b", "c"]);
+
+  assertEqual(writeCapture.length, 1, "writeKnowledge call count");
+  for (const r of writeCapture[0].state) {
+    assertEqual(r.uncertainty_level, 1, `${r.id} updated to 1`);
+    assertEqual(r.change_count_since_review, 0, `${r.id} change count reset`);
+  }
+});
+
+await testAsync("Test 12 — markSelectedReviewed does not mutate input KnowledgeFile", async () => {
+  const records = [
+    makeStateRecord({ id: "x", uncertainty_level: 2, change_count_since_review: 3 }),
+  ];
+  const originalKnowledge = makeKnowledge(records);
+  const writeCapture: KnowledgeFile[] = [];
+  const panel = new DigestPanel(makeMockPanel(), makeMockFs({ knowledge: originalKnowledge, writeCapture }), makeOutputChannel(), originalKnowledge);
+
+  await internal(panel).markSelectedReviewed(["x"]);
+
+  assertEqual(originalKnowledge.state[0].uncertainty_level, 2, "original not mutated");
   assertEqual(originalKnowledge.state[0].change_count_since_review, 3, "original change_count not mutated");
 });
 

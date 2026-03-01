@@ -96,13 +96,17 @@ export class DigestPanel {
 
     // Message handler
     const messageSub = this._panel.webview.onDidReceiveMessage(
-      (message: { command: string; record_id?: string }) => {
+      (message: { command: string; record_id?: string; record_ids?: string[] }) => {
         if (message.command === "mark_reviewed" && message.record_id) {
           void this.markReviewed(message.record_id).catch((err: Error) => {
             void vscode.window.showErrorMessage(err.message);
           });
         } else if (message.command === "mark_all_reviewed") {
           void this.markAllReviewed().catch((err: Error) => {
+            void vscode.window.showErrorMessage(err.message);
+          });
+        } else if (message.command === "mark_selected_reviewed" && message.record_ids) {
+          void this.markSelectedReviewed(message.record_ids).catch((err: Error) => {
             void vscode.window.showErrorMessage(err.message);
           });
         }
@@ -250,6 +254,47 @@ export class DigestPanel {
     };
 
     // ONE atomic write for all records
+    await this._skl.writeKnowledge(updatedKnowledge);
+    this.currentKnowledge = updatedKnowledge;
+    void this.render();
+  }
+
+  /**
+   * Reduce selected level-2 State records to level 1 in a single atomic write.
+   * Records at levels 0, 1, and 3 are silently skipped — bulk selections are
+   * expected to contain mixed-level entries.
+   */
+  async markSelectedReviewed(recordIds: string[]): Promise<void> {
+    const today = new Date().toISOString().split("T")[0];
+
+    // Only records that (a) exist and (b) are at level 2
+    const eligibleIds = new Set(
+      recordIds.filter((id) => {
+        const record = this.currentKnowledge.state.find((r) => r.id === id);
+        return record !== undefined && record.uncertainty_level === 2;
+      }),
+    );
+
+    if (eligibleIds.size === 0) {
+      this._outputChannel.appendLine(
+        "markSelectedReviewed: no eligible level-2 entries in selection.",
+      );
+      return;
+    }
+
+    const updatedKnowledge: KnowledgeFile = {
+      ...this.currentKnowledge,
+      state: this.currentKnowledge.state.map((r) => {
+        if (!eligibleIds.has(r.id)) return r;
+        return {
+          ...r,
+          uncertainty_level: 1 as const,
+          last_reviewed_at: today,
+          change_count_since_review: 0,
+        };
+      }),
+    };
+
     await this._skl.writeKnowledge(updatedKnowledge);
     this.currentKnowledge = updatedKnowledge;
     void this.render();
