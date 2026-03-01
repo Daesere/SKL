@@ -55,7 +55,7 @@ installation service, agent configuration command, and Queue panel UI.
 
 ---
 
-## Stage 3 — Orchestrator ⏳
+## Stage 3 — Orchestrator ✅ _(completed 2026-02-28)_
 
 **Goal:** LLM-based Orchestrator that reviews the Queue, applies
 classification verification, makes approve/reject/escalate/RFC decisions,
