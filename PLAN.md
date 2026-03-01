@@ -62,18 +62,29 @@ classification verification, makes approve/reject/escalate/RFC decisions,
 writes State, and produces session handoff logs.
 
 ### Substages
-- 3.1 Stage 1 deterministic classification overrides
-- 3.2 Verifier pass for ambiguous proposals
-- 3.3 Circuit breaker
-- 3.4 Conflict detection against existing State
-- 3.5 Assumption conflict detection and RFC trigger
-- 3.6 Decision engine and rationale writer
-- 3.7 State writer
-- 3.8 Session budget and handoff log
+- 3.1 Orchestrator session service and session state types
+- 3.2 Classification service: Stage 1 deterministic overrides
+- 3.3 Verifier pass and circuit breaker
+- 3.4 Conflict detection (State conflicts and assumption conflicts)
+- 3.5 RFC trigger detection and RFC generator
+- 3.6 State writer and ADR promotion
+- 3.7 Decision engine
+- 3.8 Session runner and handoff log
 - 3.9 Orchestrator panel UI
 
 ### Completion Criteria
-- TBD when Stage 3 prompts are written
+- "SKL: Open Orchestrator Panel" → "Start Session" processes all pending
+  proposals and writes decisions with rationales to knowledge.json
+- A mechanical_only proposal with no risk signals is auto-approved without
+  an LLM rationale call
+- A proposal classified as architectural triggers an RFC written to .skl/rfcs/
+- Two proposals with conflicting assumptions trigger an RFC automatically
+- A proposal targeting uncertainty_level 3 is escalated without review
+- Session budget enforced: stops at 15 proposals or 90 minutes, writes handoff log
+- New session initialises from knowledge.json plus most recent session log only
+- Approving a proposal runs git merge on the agent's branch
+- A merge conflict sets merge_conflict: true without crashing the session
+- npm run lint clean, all TypeScript compiles under strict mode
 
 ---
 
