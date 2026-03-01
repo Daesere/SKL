@@ -7,8 +7,12 @@
  *   npx tsx src/services/__tests__/ClassificationService.test.ts
  */
 
-import { applyStage1Overrides } from "../ClassificationService.js";
-import type { QueueProposal, RiskSignals, ChangeType } from "../../types/index.js";
+import {
+  applyStage1Overrides,
+  requiresMandatoryIndividualReview,
+  isEligibleForAutoApproval,
+} from "../ClassificationService.js";
+import type { QueueProposal, RiskSignals, ChangeType, Assumption, ClassificationResult } from "../../types/index.js";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -32,6 +36,7 @@ function makeProposal(overrides: {
   change_type?: ChangeType;
   cross_scope_flag?: boolean;
   risk_signals?: Partial<RiskSignals>;
+  assumptions?: Assumption[];
 } = {}): QueueProposal {
   return {
     proposal_id: "test-001",
@@ -43,7 +48,7 @@ function makeProposal(overrides: {
     responsibilities: "handles foo logic",
     dependencies: [],
     invariants_touched: [],
-    assumptions: [],
+    assumptions: overrides.assumptions ?? [],
     uncertainty_delta: "+0",
     rationale: "test proposal",
     out_of_scope: false,
@@ -196,6 +201,79 @@ console.log("ClassificationService — Stage 1 overrides\n");
   assert(result.resolved_change_type === "architectural", "Test 7: architectural unchanged");
   assert(result.stage1_override === false, "Test 7: no override");
   assert(result.override_reason === null, "Test 7: no reason");
+}
+
+/* ================================================================== */
+console.log("\nisEligibleForAutoApproval\n");
+/* ================================================================== */
+
+/* ------------------------------------------------------------------ */
+/*  Test 8: All signals false, mechanical_only true, empty assumptions */
+/* ------------------------------------------------------------------ */
+{
+  const proposal = makeProposal({ risk_signals: { mechanical_only: true } });
+  const result: ClassificationResult = { resolved_change_type: "mechanical", stage1_override: true, override_reason: "AST confirms mechanical-only change" };
+  assert(isEligibleForAutoApproval(proposal, result) === true, "Test 8: eligible for auto-approval");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 9: mechanical_only true but high_fan_in_module_modified true  */
+/* ------------------------------------------------------------------ */
+{
+  const proposal = makeProposal({ risk_signals: { mechanical_only: true, high_fan_in_module_modified: true } });
+  const result: ClassificationResult = { resolved_change_type: "mechanical", stage1_override: true, override_reason: "AST confirms mechanical-only change" };
+  assert(isEligibleForAutoApproval(proposal, result) === false, "Test 9: high_fan_in disqualifies auto-approval");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 10: mechanical_only true but a shared assumption              */
+/* ------------------------------------------------------------------ */
+{
+  const sharedAssumption: Assumption = { id: "a1", text: "DB schema stable", declared_by: "agent-a", scope: "core", shared: true };
+  const proposal = makeProposal({ risk_signals: { mechanical_only: true }, assumptions: [sharedAssumption] });
+  const result: ClassificationResult = { resolved_change_type: "mechanical", stage1_override: true, override_reason: "AST confirms mechanical-only change" };
+  assert(isEligibleForAutoApproval(proposal, result) === false, "Test 10: shared assumption disqualifies auto-approval");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 11: mechanical_only true, only non-shared assumptions         */
+/* ------------------------------------------------------------------ */
+{
+  const privateAssumption: Assumption = { id: "a2", text: "internal detail", declared_by: "agent-a", scope: "core", shared: false };
+  const proposal = makeProposal({ risk_signals: { mechanical_only: true }, assumptions: [privateAssumption] });
+  const result: ClassificationResult = { resolved_change_type: "mechanical", stage1_override: true, override_reason: "AST confirms mechanical-only change" };
+  assert(isEligibleForAutoApproval(proposal, result) === true, "Test 11: non-shared assumptions still eligible");
+}
+
+/* ================================================================== */
+console.log("\nrequiresMandatoryIndividualReview\n");
+/* ================================================================== */
+
+/* ------------------------------------------------------------------ */
+/*  Test 12: touched_auth_or_permission_patterns triggers review       */
+/* ------------------------------------------------------------------ */
+{
+  const proposal = makeProposal({ risk_signals: { touched_auth_or_permission_patterns: true } });
+  const result: ClassificationResult = { resolved_change_type: "behavioral", stage1_override: true, override_reason: "signals" };
+  assert(requiresMandatoryIndividualReview(proposal, result) === true, "Test 12: auth signal triggers review");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 13: only stage1_override true (no risk signals)               */
+/* ------------------------------------------------------------------ */
+{
+  const proposal = makeProposal();
+  const result: ClassificationResult = { resolved_change_type: "behavioral", stage1_override: true, override_reason: "override" };
+  assert(requiresMandatoryIndividualReview(proposal, result) === true, "Test 13: stage1_override alone triggers review");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test 14: all false, stage1_override false → no mandatory review    */
+/* ------------------------------------------------------------------ */
+{
+  const proposal = makeProposal({ change_type: "behavioral" });
+  const result: ClassificationResult = { resolved_change_type: "behavioral", stage1_override: false, override_reason: null };
+  assert(requiresMandatoryIndividualReview(proposal, result) === false, "Test 14: no signals, no override → no mandatory review");
 }
 
 /* ------------------------------------------------------------------ */

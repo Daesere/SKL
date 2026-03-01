@@ -68,3 +68,49 @@ export function applyStage1Overrides(proposal: QueueProposal): ClassificationRes
     override_reason: null,
   };
 }
+
+/**
+ * Returns true if the proposal must receive individual orchestrator review.
+ *
+ * Any single true condition triggers mandatory review (OR logic).
+ * See Section 7.3.
+ */
+export function requiresMandatoryIndividualReview(
+  proposal: QueueProposal,
+  result: ClassificationResult,
+): boolean {
+  return (
+    proposal.risk_signals.touched_auth_or_permission_patterns ||
+    proposal.risk_signals.public_api_signature_changed ||
+    proposal.risk_signals.invariant_referenced_file_modified ||
+    proposal.cross_scope_flag ||
+    result.stage1_override
+  );
+}
+
+/**
+ * Returns true only when every auto-approval precondition is satisfied.
+ *
+ * All eight conditions must hold simultaneously (strict AND).
+ * Kept independent from requiresMandatoryIndividualReview so each
+ * can evolve separately. See Section 7.3.
+ */
+export function isEligibleForAutoApproval(
+  proposal: QueueProposal,
+  result: ClassificationResult,
+): boolean {
+  if (result.resolved_change_type !== "mechanical") return false;
+  if (!proposal.risk_signals.mechanical_only) return false;
+  if (proposal.risk_signals.touched_auth_or_permission_patterns) return false;
+  if (proposal.risk_signals.public_api_signature_changed) return false;
+  if (proposal.risk_signals.invariant_referenced_file_modified) return false;
+  if (proposal.risk_signals.high_fan_in_module_modified) return false;
+  if (proposal.cross_scope_flag) return false;
+
+  // Assumptions: empty array is fine; otherwise every assumption must be non-shared
+  if (proposal.assumptions.length > 0 && proposal.assumptions.some((a) => a.shared)) {
+    return false;
+  }
+
+  return true;
+}
