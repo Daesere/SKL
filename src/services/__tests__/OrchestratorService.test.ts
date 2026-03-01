@@ -20,6 +20,7 @@ import type {
   HookConfig,
   ChangeType,
   RiskSignals,
+  TaskAssignment,
 } from "../../types/index.js";
 import { DEFAULT_HOOK_CONFIG, DEFAULT_SESSION_BUDGET } from "../../types/index.js";
 import type { SKLFileSystem } from "../SKLFileSystem.js";
@@ -998,6 +999,108 @@ await testAsync(
     assertEqual(mocks.knowledgeWrites.length, 2, "knowledgeWrites.length");
     // endSession called exactly once
     assertEqual(mocks.sessionLogs.length, 1, "sessionLogs.length");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// runTaskAssignment tests (Substage 5.3)
+// ---------------------------------------------------------------------------
+
+function makeTaskAssignmentFs(): SKLFileSystem {
+  return {
+    repoRoot: "/repo",
+    readKnowledge: async () => makeKnowledge([], []),
+    readScopeDefinitions: async (): Promise<ScopeDefinition> => ({
+      scope_definitions: {
+        version: "1.0",
+        scopes: {
+          auth: {
+            description: "Authentication scope",
+            allowed_path_prefixes: ["src/auth"],
+            forbidden_path_prefixes: [],
+            permitted_responsibilities: [],
+            forbidden_responsibilities: [],
+            owner: "agent-alpha",
+          },
+        },
+      },
+    }),
+    listADRs: async () => [] as string[],
+    readADR: async () => ({ id: "adr-1", title: "ADR 1", status: "accepted", context: "", decision: "", consequences: "", created_at: "2024-01-01T00:00:00.000Z" }) as never,
+    readHookConfig: async () => HOOK_CFG,
+    writeKnowledge: async () => { /* no-op */ },
+    writeSessionLog: async () => { /* no-op */ },
+    getNextSessionId: async () => "sess-ta-001",
+    readMostRecentSessionLog: async () => null,
+  } as unknown as SKLFileSystem;
+}
+
+const VALID_ASSIGNMENT = {
+  agent_id: "agent-alpha",
+  semantic_scope: "auth",
+  file_scope: "src/auth/tokens.py",
+  task_description: "Refactor token logic",
+  assignment_rationale: "Improves expiry handling",
+};
+
+// TA-1 — valid JSON array of 2 assignments → returns TaskAssignment[] of length 2
+await testAsync(
+  "TA-1 — runTaskAssignment: valid JSON array of 2 assignments → length 2",
+  async () => {
+    resetLmMock();
+    const two = [VALID_ASSIGNMENT, { ...VALID_ASSIGNMENT, agent_id: "agent-beta" }];
+    setSelectChatModels(async () => [createMockModel(JSON.stringify(two))]);
+    const service = new OrchestratorService(
+      makeTaskAssignmentFs(), MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const result: TaskAssignment[] = await service.runTaskAssignment("Add password reset");
+    if (result.length !== 2) throw new Error(`Expected 2 assignments, got ${result.length}`);
+    if (result[0]!.agent_id !== "agent-alpha") throw new Error("Wrong agent_id on first assignment");
+    resetLmMock();
+  },
+);
+
+// TA-2 — 1 valid + 1 invalid element → returns array of length 1
+await testAsync(
+  "TA-2 — runTaskAssignment: 1 valid + 1 invalid element → length 1",
+  async () => {
+    resetLmMock();
+    const mixed = [VALID_ASSIGNMENT, { agent_id: 42, bad_field: true }];
+    setSelectChatModels(async () => [createMockModel(JSON.stringify(mixed))]);
+    const service = new OrchestratorService(
+      makeTaskAssignmentFs(), MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const result: TaskAssignment[] = await service.runTaskAssignment("Add feature");
+    if (result.length !== 1) throw new Error(`Expected 1 assignment, got ${result.length}`);
+    resetLmMock();
+  },
+);
+
+// TA-3 — malformed JSON → returns [] without throwing
+await testAsync(
+  "TA-3 — runTaskAssignment: malformed JSON → returns [] without throwing",
+  async () => {
+    resetLmMock();
+    setSelectChatModels(async () => [createMockModel("NOT VALID JSON {{{")]);
+    const service = new OrchestratorService(
+      makeTaskAssignmentFs(), MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const result: TaskAssignment[] = await service.runTaskAssignment("Add feature");
+    if (result.length !== 0) throw new Error(`Expected [], got length ${result.length}`);
+    resetLmMock();
+  },
+);
+
+// TA-4 — LLM unavailable → returns [] without throwing
+await testAsync(
+  "TA-4 — runTaskAssignment: LLM unavailable → returns [] without throwing",
+  async () => {
+    resetLmMock(); // default: no models
+    const service = new OrchestratorService(
+      makeTaskAssignmentFs(), MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const result: TaskAssignment[] = await service.runTaskAssignment("Add feature");
+    if (result.length !== 0) throw new Error(`Expected [], got length ${result.length}`);
   },
 );
 

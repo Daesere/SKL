@@ -146,10 +146,10 @@ export class OrchestratorPanel {
         });
         if (!featureRequest) return;
 
-        const assignmentsJson =
+        const assignments =
           await this._orchestratorService.runTaskAssignment(featureRequest);
         const doc = await vscode.workspace.openTextDocument({
-          content: assignmentsJson,
+          content: JSON.stringify(assignments, null, 2),
           language: "json",
         });
         await vscode.window.showTextDocument(doc);

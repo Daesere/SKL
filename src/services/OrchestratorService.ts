@@ -1,7 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
-import { z } from "zod";
 import type { SKLFileSystem } from "./SKLFileSystem.js";
 import type {
   SessionBudget,
@@ -18,8 +17,9 @@ import type {
   ClassificationResult,
   StateConflictResult,
   RFCTriggerReason,
+  TaskAssignment,
 } from "../types/index.js";
-import { DEFAULT_SESSION_BUDGET } from "../types/index.js";
+import { DEFAULT_SESSION_BUDGET, TaskAssignmentSchema } from "../types/index.js";
 import {
   isUncertaintyLevel3,
   detectStateConflict,
@@ -648,16 +648,7 @@ export class OrchestratorService {
    * Returns `"[]"` (and logs a warning) when the LLM is unavailable or the
    * response cannot be parsed. Never throws.
    */
-  async runTaskAssignment(featureRequest: string): Promise<string> {
-    // Per-call schema for the LLM response items
-    const TaskAssignmentSchema = z.object({
-      agent_id: z.string(),
-      semantic_scope: z.string(),
-      file_scope: z.array(z.string()),
-      task_description: z.string(),
-      assignment_rationale: z.string(),
-    });
-    type TaskAssignment = z.infer<typeof TaskAssignmentSchema>;
+  async runTaskAssignment(featureRequest: string): Promise<TaskAssignment[]> {
 
     const [knowledge, scopeDefinitions] = await Promise.all([
       this.sklFileSystem.readKnowledge(),
@@ -703,7 +694,7 @@ export class OrchestratorService {
       this.outputChannel.appendLine(
         "[OrchestratorService] LLM unavailable for task assignment — returning empty plan.",
       );
-      return "[]";
+      return [];
     }
 
     const model = models[0]!;
@@ -717,47 +708,34 @@ export class OrchestratorService {
         text += chunk;
       }
 
-      let raw: unknown;
       try {
-        raw = JSON.parse(text.trim());
+        const raw: unknown = JSON.parse(text.trim());
+        if (!Array.isArray(raw)) {
+          throw new Error("LLM response is not a JSON array");
+        }
+        const validAssignments: TaskAssignment[] = [];
+        for (const item of raw) {
+          const parsed = TaskAssignmentSchema.safeParse(item);
+          if (!parsed.success) {
+            this.outputChannel.appendLine(
+              `[OrchestratorService] Task assignment: malformed item dropped — ${parsed.error.message}`,
+            );
+            continue;
+          }
+          validAssignments.push(parsed.data);
+        }
+        return validAssignments;
       } catch {
         this.outputChannel.appendLine(
-          `[OrchestratorService] Task assignment: LLM returned non-JSON — ${text.trim().slice(0, 200)}`,
+          "[OrchestratorService] runTaskAssignment: failed to parse or validate LLM output — returning empty array.",
         );
-        return "[]";
+        return [];
       }
-
-      if (!Array.isArray(raw)) {
-        this.outputChannel.appendLine(
-          "[OrchestratorService] Task assignment: LLM response is not a JSON array.",
-        );
-        return "[]";
-      }
-
-      const validAssignments: TaskAssignment[] = [];
-      for (const item of raw) {
-        const parsed = TaskAssignmentSchema.safeParse(item);
-        if (!parsed.success) {
-          this.outputChannel.appendLine(
-            `[OrchestratorService] Task assignment: malformed item dropped — ${JSON.stringify(item)}`,
-          );
-          continue;
-        }
-        if (!validScopeKeys.has(parsed.data.semantic_scope)) {
-          this.outputChannel.appendLine(
-            `[OrchestratorService] Task assignment: unknown scope '${parsed.data.semantic_scope}' — dropped.`,
-          );
-          continue;
-        }
-        validAssignments.push(parsed.data);
-      }
-
-      return JSON.stringify(validAssignments);
     } catch {
       this.outputChannel.appendLine(
         "[OrchestratorService] Task assignment: LLM request failed — returning empty plan.",
       );
-      return "[]";
+      return [];
     }
   }
 

@@ -187,6 +187,10 @@ export const ProposalReviewResultSchema = z.object({
 });
 export type ProposalReviewResult = z.infer<typeof ProposalReviewResultSchema>;
 
+// TaskAssignment
+export { TaskAssignmentSchema } from "./TaskAssignment.js";
+export type { TaskAssignment } from "./TaskAssignment.js";
+
 // CICheckResult (Section 9.3 / 3.2.3)
 export const CICheckResultSchema = z.object({
   state_record_id: z.string(),
