@@ -24,6 +24,11 @@ import type {
 import { DEFAULT_HOOK_CONFIG, DEFAULT_SESSION_BUDGET } from "../../types/index.js";
 import type { SKLFileSystem } from "../SKLFileSystem.js";
 import type * as vscode from "vscode";
+import {
+  setSelectChatModels,
+  resetLmMock,
+  createMockModel,
+} from "../../testing/configure-lm-mock.js";
 
 // ---------------------------------------------------------------------------
 // Scaffolding
@@ -180,19 +185,19 @@ function makeAgreementVerifier(): VerifierServiceLike & { wasCalled: () => boole
   };
 }
 
-/** A verifier that always disagrees: upgrades to architectural. */
+/** A verifier that always disagrees: verifier says mechanical, agent said behavioral.
+ * Resolved to behavioral (higher risk) — avoids triggering an RFC. */
 function makeDisagreementVerifier(): VerifierServiceLike & { wasCalled: () => boolean } {
   let called = false;
   return {
     getFileDiff: async () => "",
     runVerifierPass: async () => {
       called = true;
-      const verifierClass: ChangeType = "architectural";
       return {
-        verifier_classification: verifierClass,
+        verifier_classification: "mechanical" as ChangeType,
         justification: "mock: disagrees",
         agreement: false,
-        resolved_classification: verifierClass,
+        resolved_classification: "behavioral" as ChangeType,
       };
     },
     wasCalled: () => called,
@@ -251,7 +256,8 @@ await testAsync(
       change_type: "mechanical",
       risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
     });
-    const knowledge = makeKnowledge(); // no state records → no level-3
+    // proposal must be in knowledge.queue — writeRationale (step 8 auto_approve) reads it
+    const knowledge = makeKnowledge([], [proposal]);
 
     const verifier = makeAgreementVerifier();
     const service = new OrchestratorService(MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET, verifier);
@@ -279,7 +285,8 @@ await testAsync(
       change_type: "behavioral",
       risk_signals: makeRiskSignals(), // all false, mechanical_only false
     });
-    const knowledge = makeKnowledge();
+    // proposal must be in knowledge.queue — writeRationale (step 8) reads it
+    const knowledge = makeKnowledge([], [proposal]);
 
     const verifier = makeAgreementVerifier();
     const service = new OrchestratorService(MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET, verifier);
@@ -298,7 +305,8 @@ await testAsync(
   "Test 4 — verifier disagreement → circuit_breaker_counts incremented in returned session",
   async () => {
     const proposal = makeProposal({ agent_id: "agent-beta" });
-    const knowledge = makeKnowledge();
+    // proposal must be in queue for writeRationale in step 8
+    const knowledge = makeKnowledge([], [proposal]);
 
     const verifier = makeDisagreementVerifier();
     const service = new OrchestratorService(MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET, verifier);
@@ -320,7 +328,8 @@ await testAsync(
   "Test 5 — three disagreements for same agent → circuit_breakers_triggered populated",
   async () => {
     const proposal = makeProposal({ agent_id: "agent-gamma" });
-    const knowledge = makeKnowledge();
+    // proposal must be in queue for writeRationale in each step-8 call
+    const knowledge = makeKnowledge([], [proposal]);
 
     const verifier = makeDisagreementVerifier();
     const service = new OrchestratorService(MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET, verifier);
@@ -347,6 +356,205 @@ await testAsync(
     }
     if (!s3.circuit_breakers_triggered[0]!.includes("agent-gamma")) {
       throw new Error(`circuit_breakers_triggered entry should reference agent-gamma: ${s3.circuit_breakers_triggered[0]}`);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Helper: sequential LLM model (returns responses in order)
+// ---------------------------------------------------------------------------
+
+function makeSequentialModel(
+  responses: string[],
+): ReturnType<typeof createMockModel> {
+  let callCount = 0;
+  return {
+    sendRequest: async () => ({
+      text: (async function* () {
+        yield responses[callCount++ % responses.length] ?? "";
+      })(),
+    }),
+  };
+}
+
+function makeRfcFs(): SKLFileSystem {
+  return {
+    listRFCs: async () => [],
+    writeRFC: async () => {},
+  } as unknown as SKLFileSystem;
+}
+
+const MOCK_RFC_JSON = JSON.stringify({
+  decision_required: "Should the auth token logic be refactored?",
+  context: "The token expiry logic needs architectural guidance.",
+  option_a: { description: "Refactor now", consequences: "API improved." },
+  option_b: { description: "Delay", consequences: "Technical debt accrues." },
+  option_c: { description: "Reject", consequences: "No change." },
+  orchestrator_recommendation: "option_a",
+  orchestrator_rationale: "Refactoring now prevents drift.",
+});
+
+// ---------------------------------------------------------------------------
+// Steps 5–8: decision engine
+// ---------------------------------------------------------------------------
+
+console.log("\nOrchestratorService — reviewProposal steps 5–8");
+console.log("================================================");
+
+// Test 6 — Eligible mechanical proposal → auto_approve, template rationale, no LLM
+await testAsync(
+  "Test 6 — eligible mechanical_only → auto_approve, template rationale, no LLM",
+  async () => {
+    resetLmMock();
+    const proposal = makeProposal({
+      change_type: "mechanical",
+      risk_signals: makeRiskSignals({ mechanical_only: true, ast_change_type: "mechanical" }),
+    });
+    const knowledge = makeKnowledge([], [proposal]);
+    const service = new OrchestratorService(
+      MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const { result } = await service.reviewProposal(
+      proposal, makeSession(), knowledge, SCOPE_DEFS, HOOK_CFG,
+    );
+    assertEqual(result.decision, "auto_approve", "decision");
+    assertEqual(result.state_updated, true, "state_updated");
+    assertEqual(result.rfc_id, null, "rfc_id");
+    if (!result.rationale.startsWith("Auto-approved:")) {
+      throw new Error(`Expected template rationale, got: ${result.rationale}`);
+    }
+  },
+);
+
+// Test 7 — State conflict (different owner) → reject, LLM called
+await testAsync(
+  "Test 7 — state conflict → reject, LLM called for rationale",
+  async () => {
+    resetLmMock();
+    const proposal = makeProposal({ agent_id: "agent-delta" });
+    // State record for same path, owned by a different agent
+    const owningRecord = makeStateRecord({ owner: "agent-alpha" });
+    const knowledge = makeKnowledge([owningRecord], [proposal]);
+    setSelectChatModels(async () => [
+      createMockModel("Rejected due to ownership conflict."),
+    ]);
+    const service = new OrchestratorService(
+      MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const { result } = await service.reviewProposal(
+      proposal, makeSession(), knowledge, SCOPE_DEFS, HOOK_CFG,
+    );
+    assertEqual(result.decision, "reject", "decision");
+    assertEqual(result.state_updated, false, "state_updated");
+    if (!result.rationale.includes("Rejected") && !result.rationale.includes("rejected")) {
+      throw new Error(`Expected reject-related rationale, got: ${result.rationale}`);
+    }
+    resetLmMock();
+  },
+);
+
+// Test 8 — Architectural change → RFC trigger, state NOT updated
+await testAsync(
+  "Test 8 — architectural change → rfc decision, state not updated",
+  async () => {
+    resetLmMock();
+    const proposal = makeProposal({ change_type: "architectural" });
+    const knowledge = makeKnowledge([], [proposal]);
+    setSelectChatModels(async () => [
+      makeSequentialModel([MOCK_RFC_JSON, "An RFC has been opened for architectural review."]),
+    ]);
+    const service = new OrchestratorService(
+      makeRfcFs(), MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const { result } = await service.reviewProposal(
+      proposal, makeSession(), knowledge, SCOPE_DEFS, HOOK_CFG,
+    );
+    assertEqual(result.decision, "rfc", "decision");
+    if (result.rfc_id === null) throw new Error("rfc_id should be populated");
+    assertEqual(result.state_updated, false, "state_updated");
+    resetLmMock();
+  },
+);
+
+// Test 9 — Shared assumption conflict → RFC trigger
+await testAsync(
+  "Test 9 — shared assumption conflict → rfc decision",
+  async () => {
+    resetLmMock();
+    const primaryProposal = makeProposal({
+      proposal_id: "p-100",
+      agent_id: "agent-delta",
+      assumptions: [{ id: "a1", text: "JWT stays stable", declared_by: "agent-delta", scope: "auth", shared: true }],
+    });
+    const otherProposal = makeProposal({
+      proposal_id: "p-101",
+      agent_id: "agent-epsilon",
+      path: "src/auth/other.py",
+      assumptions: [{ id: "a2", text: "JWT will change", declared_by: "agent-epsilon", scope: "auth", shared: true }],
+    });
+    const knowledge = makeKnowledge([], [primaryProposal, otherProposal]);
+    // 3 sequential LLM calls: assumption conflict check, RFC JSON, RFC rationale
+    setSelectChatModels(async () => [
+      makeSequentialModel([
+        "YES\nThe assumptions about JWT stability are contradictory.",
+        MOCK_RFC_JSON,
+        "RFC opened: assumption conflict requires human resolution.",
+      ]),
+    ]);
+    const service = new OrchestratorService(
+      makeRfcFs(), MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const { result } = await service.reviewProposal(
+      primaryProposal, makeSession(), knowledge, SCOPE_DEFS, HOOK_CFG,
+    );
+    assertEqual(result.decision, "rfc", "decision");
+    if (result.rfc_id === null) throw new Error("rfc_id should be populated");
+    resetLmMock();
+  },
+);
+
+// Test 10 — Approve decision → State record created in updatedKnowledge
+await testAsync(
+  "Test 10 — approve decision → state record created in updatedKnowledge",
+  async () => {
+    resetLmMock();
+    const proposal = makeProposal({ agent_id: "agent-zeta", proposal_id: "p-200" });
+    const knowledge = makeKnowledge([], [proposal]);
+    setSelectChatModels(async () => [
+      createMockModel("Approved with standard review."),
+    ]);
+    const service = new OrchestratorService(
+      MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const { result, updatedKnowledge } = await service.reviewProposal(
+      proposal, makeSession(), knowledge, SCOPE_DEFS, HOOK_CFG,
+    );
+    assertEqual(result.decision, "approve", "decision");
+    assertEqual(result.state_updated, true, "state_updated");
+    const stateEntry = updatedKnowledge.state.find((r) => r.path === proposal.path);
+    if (!stateEntry) throw new Error("State record should be created for approved proposal");
+    assertEqual(stateEntry.owner, "agent-zeta", "stateEntry.owner");
+    resetLmMock();
+  },
+);
+
+// Test 11 — LLM unavailable → falls back to template rationale, does not throw
+await testAsync(
+  "Test 11 — LLM unavailable → fallback rationale returned without throwing",
+  async () => {
+    resetLmMock();
+    const proposal = makeProposal({ proposal_id: "p-300" });
+    const knowledge = makeKnowledge([], [proposal]);
+    const service = new OrchestratorService(
+      MOCK_FS, MOCK_CTX, DEFAULT_SESSION_BUDGET, makeAgreementVerifier(),
+    );
+    const { result } = await service.reviewProposal(
+      proposal, makeSession(), knowledge, SCOPE_DEFS, HOOK_CFG,
+    );
+    // decision is approve (behavioral, no conflicts)
+    assertEqual(result.decision, "approve", "decision");
+    if (!result.rationale.includes("LLM unavailable for detailed rationale")) {
+      throw new Error(`Expected fallback rationale, got: ${result.rationale}`);
     }
   },
 );

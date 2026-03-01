@@ -11,12 +11,31 @@ import type {
   ChangeType,
   VerifierResult,
   ProposalReviewResult,
+  DecisionType,
+  ClassificationResult,
+  StateConflictResult,
+  RFCTriggerReason,
 } from "../types/index.js";
 import { DEFAULT_SESSION_BUDGET } from "../types/index.js";
-import { isUncertaintyLevel3 } from "./ConflictDetectionService.js";
-import { applyStage1Overrides, needsVerifierPass } from "./ClassificationService.js";
-import { writeRationale } from "./StateWriterService.js";
+import {
+  isUncertaintyLevel3,
+  detectStateConflict,
+  detectAssumptionConflict,
+} from "./ConflictDetectionService.js";
+import {
+  applyStage1Overrides,
+  needsVerifierPass,
+  isEligibleForAutoApproval,
+} from "./ClassificationService.js";
+import {
+  writeRationale,
+  createStateEntry,
+  updateStateEntry,
+  deriveStateId,
+} from "./StateWriterService.js";
+import { detectRFCTrigger, generateRFC } from "./RFCService.js";
 import { VerifierService } from "./VerifierService.js";
+import type { OutputChannelLike } from "./VerifierService.js";
 
 /**
  * Minimal interface for the LLM verifier pass — satisfied by VerifierService
@@ -46,6 +65,7 @@ export class OrchestratorService {
   private readonly extensionContext: vscode.ExtensionContext;
   private readonly budget: SessionBudget;
   private readonly verifierService: VerifierServiceLike;
+  private readonly outputChannel: OutputChannelLike;
 
   /** Most recent session log from the prior session, or null. */
   private priorSessionLog: SessionLog | null = null;
@@ -55,11 +75,13 @@ export class OrchestratorService {
     context: vscode.ExtensionContext,
     budget: SessionBudget = DEFAULT_SESSION_BUDGET,
     verifierService?: VerifierServiceLike,
+    outputChannel?: OutputChannelLike,
   ) {
     this.sklFileSystem = sklFileSystem;
     this.extensionContext = context;
     this.budget = budget;
     this.verifierService = verifierService ?? new VerifierService({ appendLine: () => {} });
+    this.outputChannel = outputChannel ?? { appendLine: () => {} };
   }
 
   // ── Session lifecycle ────────────────────────────────────────────
@@ -346,18 +368,140 @@ export class OrchestratorService {
     const hasCrossScopeDeps: boolean =
       currentProposal.dependency_scan.cross_scope_undeclared.length > 0;
 
-    // TODO: steps 5-8 implemented in next prompt
-    void resolvedClassification;
-    void circuitBreakerActive;
-    void hasCrossScopeDeps;
-    void scopeDefinitions;
+    // STEP 5 — Assumption conflict detection
+    const otherPending = updatedKnowledge.queue.filter(
+      (p) => p.status === "pending" && p.proposal_id !== currentProposal.proposal_id,
+    );
+    const assumptionConflict = await detectAssumptionConflict(
+      currentProposal,
+      otherPending,
+      this.outputChannel,
+    );
+
+    // STEP 6 — State conflict detection
+    const stateConflict = detectStateConflict(currentProposal, updatedKnowledge.state);
+
+    // STEP 7 — RFC trigger detection
+    const proposalWithResolvedType: QueueProposal = {
+      ...currentProposal,
+      change_type: resolvedClassification,
+    };
+    const rfcTrigger = detectRFCTrigger(
+      proposalWithResolvedType,
+      updatedKnowledge,
+      assumptionConflict,
+    );
+    if (rfcTrigger !== null) {
+      const rfc = await generateRFC(
+        proposalWithResolvedType,
+        rfcTrigger,
+        assumptionConflict,
+        updatedKnowledge,
+        this.sklFileSystem,
+      );
+      updatedSession = {
+        ...updatedSession,
+        rfcs_opened: [...updatedSession.rfcs_opened, rfc.id],
+      };
+      const rfcRationaleText = await this.generateDecisionRationale(
+        currentProposal,
+        "rfc",
+        stage1Result,
+        stateConflict,
+        rfcTrigger,
+        circuitBreakerActive,
+        hasCrossScopeDeps,
+        resolvedClassification,
+      );
+      updatedKnowledge = writeRationale(
+        currentProposal.proposal_id,
+        "rfc",
+        rfcRationaleText,
+        "architectural",
+        updatedKnowledge,
+      );
+      return {
+        result: {
+          proposal_id: currentProposal.proposal_id,
+          decision: "rfc",
+          rationale: rfcRationaleText,
+          rfc_id: rfc.id,
+          state_updated: false,
+          branch_merged: false,
+          merge_conflict: false,
+        },
+        updatedKnowledge,
+        updatedSession,
+      };
+    }
+
+    // STEP 8 — Final decision
+    let decision: DecisionType;
+    if (stateConflict.has_conflict) {
+      decision = "reject";
+    } else if (
+      isEligibleForAutoApproval(currentProposal, stage1Result) &&
+      !assumptionConflict.has_conflict &&
+      !hasCrossScopeDeps &&
+      !circuitBreakerActive
+    ) {
+      decision = "auto_approve";
+    } else {
+      decision = "approve";
+    }
+
+    // decisionType: "architectural" when architectural classification; RFC/escalate already
+    // returned early, so their conditions are provably false at this point.
+    const decisionType: "implementation" | "architectural" =
+      resolvedClassification === "architectural" ? "architectural" : "implementation";
+
+    const rationaleText = await this.generateDecisionRationale(
+      currentProposal,
+      decision,
+      stage1Result,
+      stateConflict,
+      rfcTrigger,
+      circuitBreakerActive,
+      hasCrossScopeDeps,
+      resolvedClassification,
+    );
+
+    updatedKnowledge = writeRationale(
+      currentProposal.proposal_id,
+      decision,
+      rationaleText,
+      decisionType,
+      updatedKnowledge,
+    );
+
+    let stateUpdated = false;
+    if (decision === "approve" || decision === "auto_approve") {
+      const stateId = deriveStateId(currentProposal.path);
+      const existingRecord = updatedKnowledge.state.find((r) => r.id === stateId);
+      if (existingRecord !== undefined) {
+        updatedKnowledge = updateStateEntry(
+          currentProposal,
+          existingRecord,
+          scopeDefinitions,
+          updatedKnowledge,
+        );
+      } else {
+        updatedKnowledge = createStateEntry(
+          currentProposal,
+          scopeDefinitions,
+          updatedKnowledge,
+        );
+      }
+      stateUpdated = true;
+    }
+
     return {
       result: {
         proposal_id: currentProposal.proposal_id,
-        decision: "approve",
-        rationale: "TODO: decision logic (steps 5–8) not yet implemented",
+        decision,
+        rationale: rationaleText,
         rfc_id: null,
-        state_updated: false,
+        state_updated: stateUpdated,
         branch_merged: false,
         merge_conflict: false,
       },
@@ -365,6 +509,120 @@ export class OrchestratorService {
       updatedSession,
     };
   }
+
+  // ── generateDecisionRationale — Section 7.3 rationale generation ————————
+
+  /**
+   * Generate a human-readable rationale paragraph for the decision.
+   *
+   * auto_approve: immediate template (no LLM call).
+   * All other decisions: LLM call via vscode.lm.selectChatModels.
+   * LLM unavailable: template fallback — does not throw.
+   */
+  private async generateDecisionRationale(
+    proposal: QueueProposal,
+    decision: DecisionType,
+    stage1Result: ClassificationResult,
+    stateConflict: StateConflictResult,
+    rfcTrigger: RFCTriggerReason | null,
+    circuitBreakerActive: boolean,
+    hasCrossScopeDeps: boolean,
+    resolvedClassification: ChangeType,
+  ): Promise<string> {
+    if (decision === "auto_approve") {
+      return (
+        "Auto-approved: AST confirms mechanical-only change with no risk signals, " +
+        "no assumption conflicts, and no cross-scope dependencies."
+      );
+    }
+
+    const fallback =
+      `${decision} decision for ${proposal.proposal_id}. ` +
+      `Classification: ${resolvedClassification}` +
+      `${
+        stage1Result.stage1_override
+          ? ` (overridden from ${proposal.change_type})`
+          : ""
+      }` +
+      ". LLM unavailable for detailed rationale.";
+
+    const models = await vscode.lm.selectChatModels({ family: "gpt-4o" });
+    if (models.length === 0) {
+      return fallback;
+    }
+
+    const model = models[0];
+
+    const riskSignalParts: string[] = [];
+    if (proposal.risk_signals.touched_auth_or_permission_patterns) {
+      riskSignalParts.push("touched_auth_or_permission_patterns");
+    }
+    if (proposal.risk_signals.public_api_signature_changed) {
+      riskSignalParts.push("public_api_signature_changed");
+    }
+    if (proposal.risk_signals.invariant_referenced_file_modified) {
+      riskSignalParts.push("invariant_referenced_file_modified");
+    }
+    if (proposal.risk_signals.high_fan_in_module_modified) {
+      riskSignalParts.push("high_fan_in_module_modified");
+    }
+
+    const classificationNote = stage1Result.stage1_override
+      ? `Stage 1 overrode agent classification from ${proposal.change_type} to ` +
+        `${resolvedClassification} (reason: ${stage1Result.override_reason ?? "none"}).`
+      : `Classification: ${resolvedClassification} (agreed with agent).`;
+
+    const contextParts: string[] = [
+      `Decision: ${decision.toUpperCase()} for proposal ${proposal.proposal_id} on ${proposal.path}.`,
+      classificationNote,
+      riskSignalParts.length > 0
+        ? `Active risk signals: ${riskSignalParts.join(", ")}.`
+        : "No active risk signals.",
+    ];
+
+    if (circuitBreakerActive) {
+      contextParts.push(`Circuit breaker is ACTIVE for agent ${proposal.agent_id}.`);
+    }
+    if (hasCrossScopeDeps) {
+      contextParts.push("Cross-scope undeclared dependencies detected.");
+    }
+    if (decision === "reject" && stateConflict.conflicting_record !== null) {
+      contextParts.push(
+        `The conflicting State record is ${stateConflict.conflicting_record.id} ` +
+          `owned by ${stateConflict.conflicting_record.owner}. ` +
+          `The proposing agent must coordinate with the owning agent and ` +
+          `re-scope the change before resubmitting.`,
+      );
+    }
+    if (decision === "rfc" && rfcTrigger !== null) {
+      contextParts.push(
+        `RFC trigger: ${rfcTrigger}. An RFC has been opened requiring a human ` +
+          `architectural decision before this proposal can proceed.`,
+      );
+    }
+
+    const prompt = [
+      contextParts.join(" "),
+      "",
+      "Write one paragraph of plain text (no JSON, no markdown) explaining this decision to the proposing agent.",
+    ].join("\n");
+
+    try {
+      const response = await model.sendRequest(
+        [vscode.LanguageModelChatMessage.User(prompt)],
+        {},
+      );
+      let text = "";
+      for await (const chunk of response.text) {
+        text += chunk;
+      }
+      return text.trim() || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  // ── Stubs — implemented in later substages ─────────────────────────────────────────────
 
   // TODO: implemented in substage 3.8
   async runSession(_session: OrchestratorSession): Promise<void> {
@@ -384,14 +642,4 @@ export class OrchestratorService {
   ): Promise<{ success: boolean; merge_conflict: boolean }> {
     throw new Error("Not implemented — substage 3.7");
   }
-
-  // TODO: implemented in substage 3.7
-  async generateDecisionRationale(
-    _proposal: QueueProposal,
-    _decision: string,
-  ): Promise<string> {
-    throw new Error("Not implemented — substage 3.7");
-  }
-
-  /* eslint-enable @typescript-eslint/no-unused-vars */
 }
