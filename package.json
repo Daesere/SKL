@@ -47,6 +47,10 @@
       {
         "command": "skl.resolveRFC",
         "title": "SKL: Resolve RFC"
+      },
+      {
+        "command": "skl.openOrchestratorPanel",
+        "title": "SKL: Open Orchestrator Panel"
       }
     ],
     "menus": {

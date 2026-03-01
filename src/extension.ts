@@ -5,11 +5,18 @@ import {
   confirmScopeDefinitions,
   rejectScopeDefinitions,
 } from "./commands/index.js";
-import { SKLFileSystem, HookInstaller, promoteRFCtoADR } from "./services/index.js";
+import {
+  SKLFileSystem,
+  HookInstaller,
+  OrchestratorService,
+  promoteRFCtoADR,
+  checkRFCDeadlines,
+} from "./services/index.js";
 import type { Rfc } from "./types/index.js";
+import { DEFAULT_SESSION_BUDGET } from "./types/index.js";
 import { SKLDiagnosticsProvider } from "./diagnostics/index.js";
 import { SKLWriteError } from "./errors/index.js";
-import { QueuePanel, generateProposalCount } from "./panels/index.js";
+import { QueuePanel, OrchestratorPanel, generateProposalCount } from "./panels/index.js";
 import type { AgentContext } from "./types/index.js";
 
 // ── Command: skl.installHook ─────────────────────────────────────
@@ -335,6 +342,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialise with zero until knowledge.json is read
   updateStatusBar(0);
 
+  // Track expired RFCs we've already notified about (per extension session)
+  const shownExpiredRFCIds = new Set<string>();
+
   // ── Diagnostics + hook-dependent commands ──────────────────────
   const wsFolder = vscode.workspace.workspaceFolders?.[0];
   if (wsFolder) {
@@ -347,6 +357,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
         // Hook installer (needs extension context for bundled script path)
         const hookInstaller = new HookInstaller(context);
+
+        // Orchestrator service — single instance per workspace session
+        const orchestratorService = new OrchestratorService(
+          skl,
+          context,
+          DEFAULT_SESSION_BUDGET,
+        );
 
         // Register commands that need SKLFileSystem / HookInstaller
         context.subscriptions.push(
@@ -362,6 +379,13 @@ export function activate(context: vscode.ExtensionContext): void {
           vscode.commands.registerCommand("skl.resolveRFC", () =>
             resolveRFCCommand(skl),
           ),
+          vscode.commands.registerCommand("skl.openOrchestratorPanel", () => {
+            OrchestratorPanel.createOrShow(
+              context.extensionUri,
+              orchestratorService,
+              skl,
+            );
+          }),
         );
 
         // Initial status bar count from current knowledge
@@ -379,6 +403,26 @@ export function activate(context: vscode.ExtensionContext): void {
           sbTimer = setTimeout(() => {
             sbTimer = undefined;
             updateStatusBar(generateProposalCount(k.queue ?? []));
+
+            // RFC deadline notifications — one per RFC per extension session
+            void checkRFCDeadlines(skl).then((expired) => {
+              for (const rfc of expired) {
+                if (shownExpiredRFCIds.has(rfc.id)) continue;
+                shownExpiredRFCIds.add(rfc.id);
+                void vscode.window
+                  .showErrorMessage(
+                    `RFC ${rfc.id} response deadline has passed. Agent work in the affected scope is paused.`,
+                    "Open Orchestrator",
+                  )
+                  .then((action) => {
+                    if (action === "Open Orchestrator") {
+                      void vscode.commands.executeCommand(
+                        "skl.openOrchestratorPanel",
+                      );
+                    }
+                  });
+              }
+            });
           }, DEBOUNCE_MS);
         });
         context.subscriptions.push(knowledgeSub);

@@ -227,6 +227,13 @@ function pageShell(bodyContent: string): string {
     } catch (_) {
       vscode = { postMessage: function(m) { console.log('postMessage:', JSON.stringify(m)); } };
     }
+    window.addEventListener('message', function(event) {
+      var msg = event.data;
+      if (msg && msg.command === 'progress') {
+        var el = document.getElementById('progress-status');
+        if (el) { el.textContent = msg.status; }
+      }
+    });
   </script>
   ${bodyContent}
 </body>
@@ -294,6 +301,7 @@ export function generateOrchestratorHtml(
   const body = `
     ${bar}
     ${rfcPanel}
+    <div id="progress-status" style="min-height:1.4em;padding:6px 10px;margin:8px 0;background:#252526;border-radius:4px;font-size:0.875em;color:#ccc;"></div>
     <div style="margin-bottom:8px;">
       <span style="font-size:0.9em;color:#888;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Reviews</span>
     </div>
