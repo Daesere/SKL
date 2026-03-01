@@ -25,6 +25,9 @@ export const HookConfigSchema = z.object({
 
   /** Python executable used by Git hook scripts. */
   python_executable: z.string().default("python3"),
+
+  /** ISO 8601 datetime of last digest review; null until first review. */
+  last_digest_at: z.string().datetime().nullable().optional().default(null),
 });
 
 export type HookConfig = z.infer<typeof HookConfigSchema>;
@@ -37,4 +40,5 @@ export const DEFAULT_HOOK_CONFIG: HookConfig = {
   review_threshold: 5,
   base_branch: "main",
   python_executable: "python3",
+  last_digest_at: null,
 };
