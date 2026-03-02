@@ -29,6 +29,8 @@ export type ExecFileFn = (
 
 /** Marker written as the very first line of the managed hook script. */
 const HOOK_MARKER = "# SKL_HOOK_V1.4";
+/** Second-line comment embedded in the Windows bootstrap to prevent backup. */
+const BOOTSTRAP_MARKER = "# SKL_BOOTSTRAP_V1.4";
 
 /**
  * Installs, detects, and removes the SKL pre-push hook inside a
@@ -83,12 +85,15 @@ export class HookInstaller {
       const bootstrapPath = path.join(hooksDir, "pre-push");
       const cmdPath = path.join(hooksDir, "pre-push.cmd");
       try {
-        const [pyContent] = await Promise.all([
+        const [pyContent, bootstrapContent] = await Promise.all([
           fs.readFile(pyPath, "utf-8"),
-          fs.access(bootstrapPath),
+          fs.readFile(bootstrapPath, "utf-8"),
           fs.access(cmdPath),
         ]);
-        return pyContent.slice(0, 50).includes(HOOK_MARKER);
+        return (
+          pyContent.slice(0, 50).includes(HOOK_MARKER) &&
+          bootstrapContent.slice(0, 80).includes(BOOTSTRAP_MARKER)
+        );
       } catch {
         return false;
       }
@@ -222,6 +227,7 @@ export class HookInstaller {
       // Bare bootstrap — must use LF only so MinGW bash can read the shebang.
       const bootstrapLines = [
         "#!/usr/bin/env python",
+        BOOTSTRAP_MARKER,
         "import os, sys, subprocess",
         "",
         "script = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"pre-push.py\")",
@@ -345,7 +351,8 @@ export class HookInstaller {
   private async backupExistingHook(hookPath: string): Promise<void> {
     try {
       const content = await fs.readFile(hookPath, "utf-8");
-      if (!content.slice(0, 50).includes(HOOK_MARKER)) {
+      const head = content.slice(0, 80);
+      if (!head.includes(HOOK_MARKER) && !head.includes(BOOTSTRAP_MARKER)) {
         await fs.rename(hookPath, hookPath + ".skl-backup");
       }
     } catch {

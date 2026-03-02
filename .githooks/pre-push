@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# SKL_BOOTSTRAP_V1.4
 import os, sys, subprocess
 
 script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pre-push.py")
