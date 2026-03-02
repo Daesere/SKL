@@ -1,0 +1,4 @@
+# Force LF line endings for Git hook files so MinGW bash can read
+# the shebang on Windows regardless of core.autocrlf setting.
+.githooks/pre-push     text eol=lf
+.githooks/pre-push.py  text eol=lf
