@@ -72,17 +72,35 @@ export class HookInstaller {
    */
   async isInstalled(repoRoot: string): Promise<boolean> {
     const hooksDir = await this.getHooksDir(repoRoot);
-    // On Windows the Python script is stored as pre-push.py; on Unix it is
-    // the bare pre-push file.
-    const hookPath =
-      process.platform === "win32"
-        ? path.join(hooksDir, "pre-push.py")
-        : path.join(hooksDir, "pre-push");
-    try {
-      const content = await fs.readFile(hookPath, "utf-8");
-      return content.slice(0, 50).includes(HOOK_MARKER);
-    } catch {
-      return false;
+
+    if (process.platform === "win32") {
+      // Windows install writes three files:
+      //   pre-push       — Python bootstrap (shebang, delegates to pre-push.py)
+      //   pre-push.py    — real SKL hook (contains HOOK_MARKER)
+      //   pre-push.cmd   — cmd.exe fallback
+      // All three must be present for the hook to be considered installed.
+      const pyPath = path.join(hooksDir, "pre-push.py");
+      const bootstrapPath = path.join(hooksDir, "pre-push");
+      const cmdPath = path.join(hooksDir, "pre-push.cmd");
+      try {
+        const [pyContent] = await Promise.all([
+          fs.readFile(pyPath, "utf-8"),
+          fs.access(bootstrapPath),
+          fs.access(cmdPath),
+        ]);
+        return pyContent.slice(0, 50).includes(HOOK_MARKER);
+      } catch {
+        return false;
+      }
+    } else {
+      // Unix: single bare pre-push file with shebang and HOOK_MARKER.
+      const hookPath = path.join(hooksDir, "pre-push");
+      try {
+        const content = await fs.readFile(hookPath, "utf-8");
+        return content.slice(0, 50).includes(HOOK_MARKER);
+      } catch {
+        return false;
+      }
     }
   }
 
