@@ -123,13 +123,16 @@ def check_file_scope(
 
     Returns a dict of path → FileViolation for *every* modified file.
     Files not in file_scope have out_of_scope set to True.
+
+    If file_scope is empty the check is skipped and no files are
+    marked out_of_scope (empty means "allow all files").
     """
     scope_set = set(file_scope)
     violations: Dict[str, FileViolation] = {}
 
     for path in modified_files:
         v = FileViolation(path)
-        if path not in scope_set:
+        if scope_set and path not in scope_set:
             v.out_of_scope = True
         violations[path] = v
 

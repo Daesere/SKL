@@ -180,23 +180,42 @@ export class HookInstaller {
       }
     } else {
       // ── Windows ─────────────────────────────────────────────────────────
-      // Git for Windows will try `pre-push` (no extension) before
-      // `pre-push.cmd`. If a bare `pre-push` exists without a recognised
-      // interpreter, Git emits "cannot spawn … pre-push" and aborts.
+      // Git for Windows (MinGW bash) executes the bare `pre-push` hook.
+      // It supports `#!/usr/bin/env python` shebangs when Python is in PATH.
       //
-      // Strategy: copy the Python script as `pre-push.py` and create a
-      // `pre-push.cmd` batch wrapper. No bare `pre-push` file is written,
-      // so Git falls straight to the `.cmd` hook.
+      // Strategy:
+      //   • copy hook source as `pre-push.py` (the real implementation)
+      //   • write a bare `pre-push` Python bootstrap (LF line endings,
+      //     no BOM) that delegates to `pre-push.py` via subprocess
+      //   • write `pre-push.cmd` as a fallback for cmd.exe environments
       const pyTargetPath = targetPath + ".py";
       const cmdPath = targetPath + ".cmd";
 
       // Back up any pre-existing non-SKL hook files.
+      await this.backupExistingHook(targetPath);
       await this.backupExistingHook(pyTargetPath);
 
       try {
         await fs.copyFile(sourcePath, pyTargetPath);
       } catch (cause) {
         throw new SKLWriteError(pyTargetPath, cause);
+      }
+
+      // Bare bootstrap — must use LF only so MinGW bash can read the shebang.
+      const bootstrapLines = [
+        "#!/usr/bin/env python",
+        "import os, sys, subprocess",
+        "",
+        "script = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"pre-push.py\")",
+        "result = subprocess.run([sys.executable, script] + sys.argv[1:], stdin=sys.stdin)",
+        "sys.exit(result.returncode)",
+        "",
+      ];
+      const bootstrapContent = Buffer.from(bootstrapLines.join("\n"), "utf-8");
+      try {
+        await fs.writeFile(targetPath, bootstrapContent);
+      } catch (cause) {
+        throw new SKLWriteError(targetPath, cause);
       }
 
       const cmdContent = `@echo off\r\n"${pythonExecutable}" "%~dp0pre-push.py" %*\r\n`;
@@ -219,11 +238,20 @@ export class HookInstaller {
     const hookPath = path.join(hooksDir, "pre-push");
 
     if (process.platform === "win32") {
-      // Windows install wrote pre-push.py + pre-push.cmd (no bare pre-push).
+      // Windows install wrote pre-push (bootstrap) + pre-push.py + pre-push.cmd.
       const pyPath = hookPath + ".py";
       const cmdPath = hookPath + ".cmd";
+      await this.silentUnlink(hookPath);
       await this.silentUnlink(pyPath);
       await this.silentUnlink(cmdPath);
+      // Restore bare hook backup if one exists.
+      const hookBackup = hookPath + ".skl-backup";
+      try {
+        await fs.access(hookBackup);
+        await fs.rename(hookBackup, hookPath);
+      } catch {
+        // No backup.
+      }
       // Restore .py backup if one exists.
       const pyBackup = pyPath + ".skl-backup";
       try {
