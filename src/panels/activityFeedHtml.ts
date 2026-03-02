@@ -82,7 +82,7 @@ function entryClasses(proposal: ProposalWithBlocking): string {
   if (proposal.out_of_scope) classes.push("is-out-of-scope");
   const blocking = proposal.blocking_reasons ?? [];
   if (blocking.length > 0) classes.push("is-blocked");
-  if (proposal.status === "approved") classes.push("is-approved");
+  if (proposal.status === "approved" || proposal.status === "auto_approve") classes.push("is-approved");
   if (proposal.status === "rejected") classes.push("is-rejected");
   return classes.join(" ");
 }

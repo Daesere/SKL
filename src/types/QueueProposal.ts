@@ -24,6 +24,7 @@ export type RationaleRecord = z.infer<typeof RationaleRecordSchema>;
 export const ProposalStatusSchema = z.union([
   z.literal("pending"),
   z.literal("approved"),
+  z.literal("auto_approve"),
   z.literal("rejected"),
   z.literal("escalated"),
   z.literal("rfc"),

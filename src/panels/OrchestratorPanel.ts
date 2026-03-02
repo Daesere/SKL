@@ -182,7 +182,7 @@ export class OrchestratorPanel {
             decision: statusToDecision(p.status),
             rationale: p.rationale ?? "",
             rfc_id: null,
-            state_updated: p.status === "approved",
+            state_updated: p.status === "approved" || p.status === "auto_approve",
             branch_merged: false,
             merge_conflict: false,
           }),

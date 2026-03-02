@@ -56,7 +56,7 @@ function cardBorder(p: ProposalView): string {
   const blocking = p.blocking_reasons && p.blocking_reasons.length > 0;
   if (blocking) return "border-left: 4px solid #e04040;";
   if (p.out_of_scope) return "border-left: 4px solid #f0c040;";
-  if (p.status === "approved") return "border-left: 4px solid #40a040;";
+  if (p.status === "approved" || p.status === "auto_approve") return "border-left: 4px solid #40a040;";
   if (p.status === "rejected") return "border-left: 4px solid #888; opacity: 0.55;";
   return "border-left: 4px solid #555;";
 }

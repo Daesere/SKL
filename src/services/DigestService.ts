@@ -53,7 +53,7 @@ export type DigestReport = {
  * to allow the comparison without introducing an explicit `any`.
  */
 function isApprovedProposal(p: QueueProposal): boolean {
-  return p.status === "approved" || (p.status as string) === "auto_approve";
+  return p.status === "approved" || p.status === "auto_approve";
 }
 
 // ── Priority scoring ──────────────────────────────────────────────────────────
