@@ -158,9 +158,42 @@ async function initPhase0Command(
 
 // ── Command: skl.configureAgent ──────────────────────────────────
 
-async function configureAgentCommand(
-  skl: SKLFileSystem,
-): Promise<void> {
+/**
+ * Must be registered synchronously on activation so it is available
+ * before the SKLFileSystem .then() block resolves.
+ */
+async function configureAgentCommand(): Promise<void> {
+  const wsFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!wsFolder) {
+    void vscode.window.showErrorMessage(
+      "SKL: No workspace folder open. Open a repository folder first.",
+    );
+    return;
+  }
+
+  let skl: SKLFileSystem;
+  try {
+    skl = await SKLFileSystem.create(wsFolder.uri.fsPath);
+  } catch {
+    void vscode.window.showErrorMessage(
+      "SKL: Could not find a Git repository root. Open the repo folder in VS Code.",
+    );
+    return;
+  }
+
+  // Ensure .skl/ is initialised
+  try {
+    await skl.readKnowledge();
+  } catch (err) {
+    if (err instanceof SKLFileNotFoundError) {
+      void vscode.window.showErrorMessage(
+        "SKL: Project not initialised. Run 'SKL: Init (Phase 0)' first.",
+      );
+      return;
+    }
+    throw err;
+  }
+
   // Step 1 — Agent ID
   const agentId = await vscode.window.showInputBox({
     prompt: "Agent ID (e.g. Agent-1)",
@@ -299,6 +332,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("skl.initPhase0", () =>
       initPhase0Command(context),
     ),
+    vscode.commands.registerCommand("skl.configureAgent", () =>
+      configureAgentCommand(),
+    ),
   );
 
   // ── Status bar item ───────────────────────────────────────────
@@ -374,9 +410,6 @@ export function activate(context: vscode.ExtensionContext): void {
         context.subscriptions.push(
           vscode.commands.registerCommand("skl.installHook", () =>
             installHookCommand(skl, hookInstaller),
-          ),
-          vscode.commands.registerCommand("skl.configureAgent", () =>
-            configureAgentCommand(skl),
           ),
           vscode.commands.registerCommand("skl.openQueuePanel", () =>
             QueuePanel.createOrShow(context.extensionUri, skl),
