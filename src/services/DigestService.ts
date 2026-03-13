@@ -46,14 +46,14 @@ export type DigestReport = {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /**
- * Returns true if the proposal has an approved or auto-approved status.
- *
- * Note: "auto_approve" is stored verbatim (via cast in writeRationale) even
- * though it is not a formal member of ProposalStatus — we cast to string here
- * to allow the comparison without introducing an explicit `any`.
+ * Returns true if the proposal has an approved-like status.
  */
 function isApprovedProposal(p: QueueProposal): boolean {
-  return p.status === "approved" || p.status === "auto_approve";
+  return (
+    p.status === "approved" ||
+    p.status === "auto_approve" ||
+    p.status === "approve"
+  );
 }
 
 // ── Priority scoring ──────────────────────────────────────────────────────────

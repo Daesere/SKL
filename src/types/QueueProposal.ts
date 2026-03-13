@@ -25,8 +25,12 @@ export const ProposalStatusSchema = z.union([
   z.literal("pending"),
   z.literal("approved"),
   z.literal("auto_approve"),
+  // Legacy decision literals that may exist in older knowledge.json files.
+  z.literal("approve"),
   z.literal("rejected"),
+  z.literal("reject"),
   z.literal("escalated"),
+  z.literal("escalate"),
   z.literal("rfc"),
 ]);
 export type ProposalStatus = z.infer<typeof ProposalStatusSchema>;

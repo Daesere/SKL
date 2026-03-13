@@ -219,9 +219,18 @@ export function writeRationale(
     recorded_at: new Date().toISOString(),
   };
 
+  const persistedStatus: QueueProposal["status"] =
+    decision === "approve"
+      ? "approved"
+      : decision === "reject"
+        ? "rejected"
+        : decision === "escalate"
+          ? "escalated"
+          : (decision as QueueProposal["status"]);
+
   const updatedProposal: QueueProposal = {
     ...knowledge.queue[proposalIndex]!,
-    status: decision as QueueProposal["status"],
+    status: persistedStatus,
     decision_rationale: rationaleRecord,
   };
 

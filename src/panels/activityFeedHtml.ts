@@ -54,10 +54,13 @@ function statusPill(status: string): string {
   let cls = "grey";
   let label = "Pending review";
   switch (status) {
-    case "approved":     cls = "green"; label = "Approved";       break;
-    case "rejected":     cls = "red";   label = "Rejected";       break;
+    case "approved":
+    case "approve":      cls = "green"; label = "Approved";       break;
+    case "rejected":
+    case "reject":       cls = "red";   label = "Rejected";       break;
     case "rfc":          cls = "amber"; label = "RFC opened";     break;
-    case "escalated":    cls = "red";   label = "Escalated";      break;
+    case "escalated":
+    case "escalate":     cls = "red";   label = "Escalated";      break;
     case "auto_approve": cls = "green"; label = "Auto-approved";  break;
   }
   return `<span class="status-pill ${cls}">${label}</span>`;
@@ -82,8 +85,14 @@ function entryClasses(proposal: ProposalWithBlocking): string {
   if (proposal.out_of_scope) classes.push("is-out-of-scope");
   const blocking = proposal.blocking_reasons ?? [];
   if (blocking.length > 0) classes.push("is-blocked");
-  if (proposal.status === "approved" || proposal.status === "auto_approve") classes.push("is-approved");
-  if (proposal.status === "rejected") classes.push("is-rejected");
+  if (
+    proposal.status === "approved" ||
+    proposal.status === "auto_approve" ||
+    proposal.status === "approve"
+  ) {
+    classes.push("is-approved");
+  }
+  if (proposal.status === "rejected" || proposal.status === "reject") classes.push("is-rejected");
   return classes.join(" ");
 }
 

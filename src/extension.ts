@@ -231,16 +231,19 @@ async function configureAgentCommand(): Promise<void> {
     }
     semanticScope = picked.label;
   } else {
-    // No scope_definitions.json yet (e.g. Phase 0) — allow free-text entry.
-    const typed = await vscode.window.showInputBox({
-      prompt: "Semantic scope name (e.g. backend, frontend, infra)",
-      placeHolder:
-        "Scope validation will be skipped until scope_definitions.json is generated",
-    });
-    if (!typed) {
+    const hookConfig = await skl.readHookConfig();
+    if (hookConfig.skl_mode === "phase_0") {
+      // Phase 0 has no enforced scope model; keep semantic scope blank.
+      semanticScope = "";
+      void vscode.window.showInformationMessage(
+        "SKL: No scope definitions found. In Phase 0, semantic scope is left blank and scope checks are skipped.",
+      );
+    } else {
+      void vscode.window.showErrorMessage(
+        "SKL: scope_definitions.json is required in full mode. Run 'SKL: Generate Scope Definitions' first.",
+      );
       return;
     }
-    semanticScope = typed.trim();
   }
 
   // Step 3 — File scope
